@@ -25,9 +25,9 @@ flowchart LR
 
 ## How it works
 
-### Training
+### "Training" (closed-form, no SGD)
 
-Two embedding models trained on similar data learn similar geometry. The spaces differ mainly by rotation. Procrustes alignment finds the optimal orthogonal matrix W from calibration pairs:
+Two embedding models trained on similar data learn similar geometry. The spaces differ mainly by rotation. Procrustes alignment finds the optimal orthogonal matrix W from calibration pairs in one shot:
 
 ```
 minimize  ||X_source @ W - X_target||_F   subject to  W^T W = I
