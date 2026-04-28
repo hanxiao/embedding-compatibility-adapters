@@ -6,22 +6,7 @@ Your embedding provider deprecated their model. You have billions of documents e
 
 A Procrustes adapter (one SVD, one matrix multiply) trained on 5000 calibration samples bridges embedding spaces with minimal quality loss - when the models are geometrically similar. No neural networks, no training loops, no GPUs.
 
-```mermaid
-flowchart LR
-    subgraph Source["Source Model (e.g. v3)"]
-        Q["Query **q** ∈ 𝒜"]
-    end
-    subgraph Adapter["Adapter **W**"]
-        A["𝒜 → ℬ"]
-    end
-    subgraph Target["Target Model (e.g. v5-small)"]
-        D["Corpus **d** ∈ ℬ"]
-    end
-    Q --> A --> R["Adapted query\n**Wq** ∈ ℬ"]
-    R --> COS["Cosine\nRetrieval"]
-    D --> COS
-    COS --> E["nDCG@10"]
-```
+![Pipeline](pipeline.png)
 
 ## How it works
 
