@@ -108,11 +108,6 @@ Models sharing architecture and training data (v5-nano/v5-small) have near-ident
 
 Use Procrustes when your provider deprecated a model, you want to test a new model without re-embedding, or you need a bridge while planning full re-embedding. Re-embed instead when CKA similarity is below 0.8, architectures are fundamentally different, or dimension mismatch is extreme.
 
-## References
-
-- Schonemann (1966). A generalized solution of the orthogonal Procrustes problem. *Psychometrika* 31(1).
-- Wang et al. (2025). UniCon: Universal Compatibility for Old-New Embedding Spaces. [arXiv:2604.16678](https://arxiv.org/abs/2604.16678)
-
 ## License
 
 Apache 2.0
