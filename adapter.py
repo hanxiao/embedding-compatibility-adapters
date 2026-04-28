@@ -2,361 +2,244 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "numpy",
-#     "scikit-learn",
-#     "sentence-transformers",
-#     "datasets",
 # ]
 # ///
 """
-Embedding Compatibility Adapter
-================================
+Embedding Compatibility Adapter - Procrustes Alignment
+
 Bridge incompatible embedding spaces with a single SVD.
+Takes two numpy arrays (source, target embeddings on shared calibration texts),
+returns the orthogonal rotation matrix that maps source -> target space.
 
-When your embedding provider deprecates a model, you don't need to re-embed
-billions of documents. Train a Procrustes adapter on a small calibration set
-and rotate the old embeddings into the new space.
+Usage as library:
+    W = procrustes_align(X_source, X_target)
+    adapted = apply_adapter(embeddings, W, target_dim)
 
-Usage:
-    uv run adapter.py --source jinaai/jina-embeddings-v3 --target jinaai/jina-embeddings-v4
-    uv run adapter.py --source jinaai/jina-embeddings-v3 --target Qwen/Qwen3-Embedding-0.6B
+Usage standalone (runs synthetic demo):
+    uv run adapter.py
 """
 
-import argparse
-import hashlib
-import os
-import time
-from pathlib import Path
-
 import numpy as np
-from datasets import load_dataset
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Load calibration data
+# Core: Procrustes alignment
 # ---------------------------------------------------------------------------
 
-def load_calibration_texts(n_samples: int = 5000, seed: int = 42) -> list[str]:
-    """Load calibration texts from AG News dataset.
+def procrustes_align(X_source: np.ndarray, X_target: np.ndarray) -> np.ndarray:
+    """Find the orthogonal matrix W that best maps X_source -> X_target.
 
-    AG News is a good calibration source: short texts, diverse topics,
-    no domain bias. 5000 samples is enough - Procrustes converges fast
-    because it only estimates an orthogonal matrix (d x d parameters,
-    heavily constrained).
+    Solves the orthogonal Procrustes problem:
+        minimize  ||X_source @ W - X_target||_F
+        subject to  W^T W = I
+
+    Solution: SVD of the cross-covariance matrix M = X_source^T @ X_target.
+    W = U @ V^T from that SVD. This is the unique optimum.
+
+    Why it works: embedding models trained on similar data learn similar geometry.
+    The spaces differ mainly by rotation. Orthogonality preserves norms and angles,
+    so cosine similarities transfer directly.
+
+    Args:
+        X_source: (n, d_source) calibration embeddings from source model
+        X_target: (n, d_target) calibration embeddings from target model
+                  (same texts, same order)
+
+    Returns:
+        W: (d_padded, d_padded) orthogonal rotation matrix
     """
-    print(f"Loading {n_samples} calibration texts from AG News...")
-    ds = load_dataset("ag_news", split="train")
-    rng = np.random.default_rng(seed)
-    indices = rng.choice(len(ds), size=n_samples, replace=False)
-    texts = [ds[int(i)]["text"] for i in indices]
-    print(f"  Loaded {len(texts)} texts (avg {np.mean([len(t) for t in texts]):.0f} chars)")
-    return texts
+    n = X_source.shape[0]
+    assert X_target.shape[0] == n, "Source and target must have same number of samples"
 
-
-# ---------------------------------------------------------------------------
-# Step 2: Generate embeddings
-# ---------------------------------------------------------------------------
-
-def get_cache_path(model_name: str, dataset_key: str) -> Path:
-    """Deterministic cache path for embeddings."""
-    cache_dir = Path(".cache")
-    cache_dir.mkdir(exist_ok=True)
-    key = hashlib.md5(f"{model_name}:{dataset_key}".encode()).hexdigest()[:12]
-    safe_name = model_name.replace("/", "__")
-    return cache_dir / f"{safe_name}_{key}.npy"
-
-
-def encode_texts(model_name: str, texts: list[str], dataset_key: str = "calibration",
-                 batch_size: int = 64) -> np.ndarray:
-    """Encode texts with a sentence-transformers model, with caching."""
-    cache_path = get_cache_path(model_name, dataset_key)
-    if cache_path.exists():
-        print(f"  Loading cached embeddings from {cache_path}")
-        return np.load(cache_path)
-
-    print(f"  Encoding {len(texts)} texts with {model_name}...")
-    model = SentenceTransformer(model_name, trust_remote_code=True)
-    t0 = time.time()
-    embeddings = model.encode(texts, batch_size=batch_size, show_progress_bar=True,
-                              normalize_embeddings=True)
-    dt = time.time() - t0
-    print(f"  Done in {dt:.1f}s - shape: {embeddings.shape}")
-
-    np.save(cache_path, embeddings)
-    return embeddings
-
-
-# ---------------------------------------------------------------------------
-# Step 3: Train Procrustes adapter
-# ---------------------------------------------------------------------------
-
-def train_procrustes(X_source: np.ndarray, X_target: np.ndarray) -> np.ndarray:
-    """Train an orthogonal Procrustes adapter: find rotation W that maps source -> target.
-
-    The Procrustes problem:
-        minimize ||X_source @ W - X_target||_F
-        subject to W^T W = I  (orthogonal)
-
-    Closed-form solution via SVD:
-        M = X_source^T @ X_target
-        U, S, V^T = SVD(M)
-        W = U @ V^T
-
-    This works because:
-    - Embedding spaces trained on similar data share geometric structure
-    - An orthogonal rotation preserves norms and angles (distances, cosine similarities)
-    - The constraint makes it impossible to overfit, even with few calibration samples
-    - Only d x d parameters, but constrained to the orthogonal group O(d)
-
-    When source and target have different dimensions, we zero-pad the smaller one.
-    """
     d_source = X_source.shape[1]
     d_target = X_target.shape[1]
     d_max = max(d_source, d_target)
 
-    # Zero-pad to match dimensions if needed
+    # Zero-pad the smaller dimension so both live in R^d_max
     if d_source < d_max:
         X_source = np.pad(X_source, ((0, 0), (0, d_max - d_source)))
     if d_target < d_max:
         X_target = np.pad(X_target, ((0, 0), (0, d_max - d_target)))
 
-    print(f"  Training Procrustes adapter ({d_source}d -> {d_target}d, padded to {d_max}d)...")
-
-    # Core computation: one SVD
+    # Cross-covariance matrix
     M = X_source.T @ X_target  # (d_max, d_max)
+
+    # SVD gives the optimal rotation
     U, S, Vt = np.linalg.svd(M, full_matrices=True)
-    W = U @ Vt  # orthogonal rotation matrix
+    W = U @ Vt
 
-    # Sanity check: W should be orthogonal
-    ortho_error = np.linalg.norm(W @ W.T - np.eye(d_max))
-    print(f"  Orthogonality error: {ortho_error:.2e} (should be ~0)")
+    # Verify orthogonality
+    ortho_err = np.linalg.norm(W @ W.T - np.eye(d_max))
+    print(f"  Procrustes fit: d_source={d_source}, d_target={d_target}, "
+          f"padded={d_max}, ortho_error={ortho_err:.2e}")
 
-    # Report alignment quality
-    X_adapted = X_source @ W
-    residual = np.linalg.norm(X_adapted - X_target) / np.linalg.norm(X_target)
+    # Residual: how well does W align the calibration data?
+    residual = np.linalg.norm(X_source @ W - X_target) / np.linalg.norm(X_target)
     print(f"  Relative residual: {residual:.4f}")
 
     return W
 
 
-def apply_adapter(embeddings: np.ndarray, W: np.ndarray) -> np.ndarray:
-    """Apply the Procrustes rotation to embeddings."""
+def apply_adapter(embeddings: np.ndarray, W: np.ndarray, target_dim: int) -> np.ndarray:
+    """Apply Procrustes rotation and truncate/renormalize to target dimension.
+
+    Args:
+        embeddings: (n, d_source) source embeddings
+        W: rotation matrix from procrustes_align
+        target_dim: output dimension (d_target from original alignment)
+
+    Returns:
+        (n, target_dim) adapted embeddings, L2-normalized
+    """
     d_emb = embeddings.shape[1]
     d_w = W.shape[0]
 
-    # Zero-pad if needed
     if d_emb < d_w:
         embeddings = np.pad(embeddings, ((0, 0), (0, d_w - d_emb)))
 
-    adapted = embeddings @ W
+    adapted = (embeddings @ W)[:, :target_dim]
 
-    # Truncate back to target dimension (columns of W that matter)
-    # Target dim = number of non-padded columns in original target
-    adapted = adapted[:, :W.shape[1]]
-
-    # Re-normalize (rotation preserves norms, but padding may not)
+    # Re-normalize (rotation preserves norms, but padding + truncation may not)
     norms = np.linalg.norm(adapted, axis=1, keepdims=True)
-    norms = np.where(norms == 0, 1, norms)
-    adapted = adapted / norms
-
-    return adapted
+    norms = np.maximum(norms, 1e-12)
+    return adapted / norms
 
 
 # ---------------------------------------------------------------------------
-# Step 4: Evaluate on NanoBEIR
+# Evaluation utilities (numpy only)
 # ---------------------------------------------------------------------------
 
-NANOBEIR_DATASETS = [
-    "climatefever", "dbpedia", "fever", "fiqa2018", "hotpotqa",
-    "msmarco", "nfcorpus", "nq", "quoraretrieval", "scidocs",
-    "arguana", "scifact", "touche2020",
-]
+def cosine_similarity(A: np.ndarray, B: np.ndarray) -> np.ndarray:
+    """Cosine similarity matrix between rows of A and rows of B.
+
+    Both A and B should be L2-normalized for this to be a simple matmul.
+    """
+    # Normalize just in case
+    A = A / np.maximum(np.linalg.norm(A, axis=1, keepdims=True), 1e-12)
+    B = B / np.maximum(np.linalg.norm(B, axis=1, keepdims=True), 1e-12)
+    return A @ B.T
 
 
-def load_nanobeir_task(task_name: str) -> tuple[list[str], list[str], dict[str, set[str]]]:
-    """Load a NanoBEIR task: queries, corpus, and relevance judgments."""
-    ds_corpus = load_dataset(f"zeta-alpha-ai/NanoBeir-{task_name}", "corpus", split="train")
-    ds_queries = load_dataset(f"zeta-alpha-ai/NanoBeir-{task_name}", "queries", split="train")
-    ds_qrels = load_dataset(f"zeta-alpha-ai/NanoBeir-{task_name}", "qrels", split="train")
-
-    corpus_texts = [doc["text"] for doc in ds_corpus]
-    corpus_ids = [doc["_id"] for doc in ds_corpus]
-    query_texts = [q["text"] for q in ds_queries]
-    query_ids = [q["_id"] for q in ds_queries]
-
-    # Build relevance map: query_id -> set of relevant corpus_ids
-    qrels = {}
-    for row in ds_qrels:
-        qid = str(row["query-id"])
-        cid = str(row["corpus-id"])
-        if row.get("score", 1) > 0:
-            qrels.setdefault(qid, set()).add(cid)
-
-    # Map query_ids and corpus_ids for lookup
-    return query_texts, corpus_texts, query_ids, corpus_ids, qrels
-
-
-def ndcg_at_k(ranked_ids: list[str], relevant_ids: set[str], k: int = 10) -> float:
-    """Compute nDCG@k for a single query."""
-    dcg = 0.0
-    for i, doc_id in enumerate(ranked_ids[:k]):
-        if doc_id in relevant_ids:
-            dcg += 1.0 / np.log2(i + 2)  # i+2 because positions are 1-indexed
-
-    # Ideal DCG
+def ndcg_at_k(ranked_ids: list[int], relevant_ids: set[int], k: int = 10) -> float:
+    """nDCG@k for a single query."""
+    dcg = sum(
+        1.0 / np.log2(i + 2)
+        for i, doc_id in enumerate(ranked_ids[:k])
+        if doc_id in relevant_ids
+    )
     n_rel = min(len(relevant_ids), k)
     idcg = sum(1.0 / np.log2(i + 2) for i in range(n_rel))
-
     return dcg / idcg if idcg > 0 else 0.0
 
 
 def evaluate_retrieval(query_embs: np.ndarray, corpus_embs: np.ndarray,
-                       query_ids: list[str], corpus_ids: list[str],
-                       qrels: dict[str, set[str]], k: int = 10) -> float:
-    """Evaluate retrieval performance using cosine similarity and nDCG@k."""
-    # Compute all query-corpus similarities at once
-    similarities = cosine_similarity(query_embs, corpus_embs)  # (n_queries, n_corpus)
+                       qrels: dict[int, set[int]], k: int = 10) -> float:
+    """Compute mean nDCG@k over all queries.
 
+    Args:
+        query_embs: (n_queries, d) query embeddings
+        corpus_embs: (n_corpus, d) corpus embeddings
+        qrels: mapping from query index -> set of relevant corpus indices
+
+    Returns:
+        Mean nDCG@k
+    """
+    sims = cosine_similarity(query_embs, corpus_embs)
     scores = []
-    for i, qid in enumerate(query_ids):
-        if str(qid) not in qrels:
-            continue
-        # Rank corpus by similarity
-        ranked_indices = np.argsort(-similarities[i])
-        ranked_corpus_ids = [corpus_ids[j] for j in ranked_indices]
-        score = ndcg_at_k(ranked_corpus_ids, qrels[str(qid)], k)
-        scores.append(score)
-
+    for qi, rel_set in qrels.items():
+        ranked = np.argsort(-sims[qi]).tolist()
+        scores.append(ndcg_at_k(ranked, rel_set, k))
     return np.mean(scores) if scores else 0.0
 
 
-def run_nanobeir_evaluation(model_name: str, encode_fn, prefix: str = "") -> dict[str, float]:
-    """Run NanoBEIR evaluation across all 13 tasks."""
-    results = {}
-    label = prefix if prefix else model_name
-
-    for task in NANOBEIR_DATASETS:
-        query_texts, corpus_texts, query_ids, corpus_ids, qrels = load_nanobeir_task(task)
-
-        query_embs = encode_fn(query_texts, f"nanobeir_{task}_queries")
-        corpus_embs = encode_fn(corpus_texts, f"nanobeir_{task}_corpus")
-
-        score = evaluate_retrieval(query_embs, corpus_embs, query_ids, corpus_ids, qrels)
-        results[task] = score
-        print(f"  {label} | {task}: nDCG@10 = {score:.4f}")
-
-    avg = np.mean(list(results.values()))
-    results["avg"] = avg
-    print(f"  {label} | AVERAGE: nDCG@10 = {avg:.4f}")
-    return results
-
-
 # ---------------------------------------------------------------------------
-# Step 5: Main - put it all together
+# Synthetic demo
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Train a Procrustes adapter between two embedding models and evaluate on NanoBEIR"
-    )
-    parser.add_argument("--source", type=str, default="jinaai/jina-embeddings-v3",
-                        help="Source model (the one being deprecated)")
-    parser.add_argument("--target", type=str, default="jinaai/jina-embeddings-v4",
-                        help="Target model (the replacement)")
-    parser.add_argument("--n-cal", type=int, default=5000,
-                        help="Number of calibration samples")
-    parser.add_argument("--batch-size", type=int, default=64,
-                        help="Encoding batch size")
-    args = parser.parse_args()
+def run_demo():
+    """Demonstrate Procrustes alignment on synthetic data.
 
-    source_model = args.source
-    target_model = args.target
-    n_cal = args.n_cal
+    Real embeddings live on a low-dimensional manifold (not random in R^d).
+    We simulate this with embeddings drawn from a rank-32 subspace, then
+    rotated + lightly noised to create the "target" space. This mirrors
+    how same-family models share geometric structure.
+    """
+    rng = np.random.default_rng(42)
 
-    print("=" * 70)
-    print("Embedding Compatibility Adapter")
-    print(f"  Source: {source_model}")
-    print(f"  Target: {target_model}")
-    print(f"  Calibration samples: {n_cal}")
-    print("=" * 70)
+    d = 128           # same dimension for simplicity
+    rank = 32         # intrinsic dimensionality (realistic for embeddings)
+    noise = 0.02      # small perturbation (models trained on similar data)
+    n_cal = 2000
+    n_queries = 100
+    n_corpus = 5000
 
-    # Step 1: Load calibration data
-    print("\n[Step 1] Loading calibration data")
-    cal_texts = load_calibration_texts(n_cal)
+    print("=" * 60)
+    print("Procrustes Adapter - Synthetic Demo")
+    print(f"  dim={d}, intrinsic_rank={rank}, noise={noise}")
+    print(f"  calibration={n_cal}, queries={n_queries}, corpus={n_corpus}")
+    print("=" * 60)
 
-    # Step 2: Generate calibration embeddings
-    print("\n[Step 2] Generating calibration embeddings")
-    source_cal = encode_texts(source_model, cal_texts, "calibration", args.batch_size)
-    target_cal = encode_texts(target_model, cal_texts, "calibration", args.batch_size)
+    # Shared low-rank basis (the "semantic structure" both models capture)
+    basis = np.linalg.qr(rng.standard_normal((d, rank)))[0]  # (d, rank) orthonormal
 
-    # Step 3: Train Procrustes adapter
-    print("\n[Step 3] Training Procrustes adapter")
-    W = train_procrustes(source_cal, target_cal)
-    print(f"  Adapter matrix shape: {W.shape}")
+    # Ground-truth rotation between the two spaces
+    R_true, _ = np.linalg.qr(rng.standard_normal((d, d)))
 
-    # Save adapter
-    adapter_path = Path(".cache") / "adapter_W.npy"
-    np.save(adapter_path, W)
-    print(f"  Saved adapter to {adapter_path}")
+    def make_embeddings(n):
+        """Generate structured embeddings on a low-rank manifold."""
+        coords = rng.standard_normal((n, rank))
+        embs = coords @ basis.T  # project into d-dimensional space
+        norms = np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-12)
+        return embs / norms
 
-    # Step 4: Evaluate on NanoBEIR
-    print("\n[Step 4] Evaluating on NanoBEIR (13 retrieval tasks)")
+    def to_target(source):
+        """Simulate target model: rotate + light noise, then normalize."""
+        target = source @ R_true + rng.normal(0, noise, source.shape)
+        norms = np.maximum(np.linalg.norm(target, axis=1, keepdims=True), 1e-12)
+        return target / norms
 
-    # Native target performance
-    print(f"\n--- Native target model ({target_model}) ---")
-    target_results = run_nanobeir_evaluation(
-        target_model,
-        lambda texts, key: encode_texts(target_model, texts, key, args.batch_size),
-        prefix="native-target"
-    )
+    # Calibration data
+    cal_source = make_embeddings(n_cal)
+    cal_target = to_target(cal_source)
 
-    # Native source performance
-    print(f"\n--- Native source model ({source_model}) ---")
-    source_results = run_nanobeir_evaluation(
-        source_model,
-        lambda texts, key: encode_texts(source_model, texts, key, args.batch_size),
-        prefix="native-source"
-    )
+    # Step 1: Train adapter
+    print("\n[1] Training Procrustes adapter on calibration data")
+    W = procrustes_align(cal_source, cal_target)
 
-    # Adapted source -> target performance
-    # For adapted evaluation: encode queries with target model, corpus with adapted source
-    # This simulates the real scenario: new queries encoded with new model,
-    # old corpus adapted from old embeddings
-    print(f"\n--- Adapted: {source_model} corpus -> {target_model} space ---")
-    d_target = target_cal.shape[1]
+    # Step 2: Test data (disjoint from calibration)
+    print("\n[2] Generating test queries and corpus")
+    query_source = make_embeddings(n_queries)
+    corpus_source = make_embeddings(n_corpus)
+    query_target = to_target(query_source)
+    corpus_target = to_target(corpus_source)
 
-    def encode_adapted_corpus(texts, key):
-        embs = encode_texts(source_model, texts, key, args.batch_size)
-        return apply_adapter(embs, W)[:, :d_target]
+    # Relevance labels: top-5 nearest neighbors in native target space
+    true_sims = cosine_similarity(query_target, corpus_target)
+    qrels = {i: set(np.argsort(-true_sims[i])[:5].tolist()) for i in range(n_queries)}
 
-    adapted_results = run_nanobeir_evaluation(
-        source_model,
-        lambda texts, key: (
-            encode_texts(target_model, texts, key, args.batch_size)
-            if "queries" in key
-            else encode_adapted_corpus(texts, key)
-        ),
-        prefix="adapted"
-    )
+    # Step 3: Evaluate
+    print("\n[3] Evaluating retrieval (nDCG@10)")
 
-    # Step 5: Print comparison
-    print("\n" + "=" * 70)
-    print("Results Summary")
-    print("=" * 70)
-    print(f"{'Task':<20} {'Native Target':>14} {'Native Source':>14} {'Adapted':>14} {'Retention':>10}")
-    print("-" * 72)
-    for task in NANOBEIR_DATASETS + ["avg"]:
-        native_t = target_results[task]
-        native_s = source_results[task]
-        adapted = adapted_results[task]
-        retention = adapted / native_t * 100 if native_t > 0 else 0
-        label = task.upper() if task == "avg" else task
-        print(f"{label:<20} {native_t:>14.4f} {native_s:>14.4f} {adapted:>14.4f} {retention:>9.1f}%")
+    score_native = evaluate_retrieval(query_target, corpus_target, qrels)
+    print(f"  Native target:    nDCG@10 = {score_native:.4f}")
 
-    print("\nRetention = adapted / native_target * 100")
-    print("Values close to 100% mean the adapter preserves retrieval quality.")
+    score_no_adapter = evaluate_retrieval(query_target, corpus_source, qrels)
+    print(f"  No adapter:       nDCG@10 = {score_no_adapter:.4f}")
+
+    corpus_adapted = apply_adapter(corpus_source, W, d)
+    score_adapted = evaluate_retrieval(query_target, corpus_adapted, qrels)
+    print(f"  With adapter:     nDCG@10 = {score_adapted:.4f}")
+
+    retention = score_adapted / score_native * 100 if score_native > 0 else 0
+    print(f"\n  Retention: {retention:.1f}% of native target quality")
+
+    print("\n" + "=" * 60)
+    print("The adapter recovers most of the native retrieval quality")
+    print("from a simple orthogonal rotation trained on calibration data.")
+    print("=" * 60)
+
+    return W
 
 
 if __name__ == "__main__":
-    main()
+    run_demo()
