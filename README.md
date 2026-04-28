@@ -2,13 +2,30 @@
 
 Your embedding provider deprecated their model. You have billions of documents embedded with the old one. Re-embedding costs thousands of dollars and days of compute.
 
-A Procrustes adapter (one SVD, one matrix multiply) trained on 5000 calibration samples bridges embedding spaces with minimal quality loss - when the models are geometrically similar. No neural networks, no training loops, no GPUs.
+A Procrustes adapter (one SVD, one matrix multiply) trained on 5000 calibration samples bridges embedding spaces with minimal quality loss - when the models are geometrically similar. No neural networks, no training loops, no GPUs. [[Report](report.pdf)]
 
-[PDF Report](report.pdf) with full methodology and analysis.
+```mermaid
+flowchart LR
+    subgraph Source["Source Model (e.g. v3)"]
+        Q["Query **q** ∈ 𝒜"]
+    end
+    subgraph Adapter["Adapter **W**"]
+        A["𝒜 → ℬ"]
+    end
+    subgraph Target["Target Model (e.g. v5-small)"]
+        D["Corpus **d** ∈ ℬ"]
+    end
+    Q --> A --> R["Adapted query\n**Wq** ∈ ℬ"]
+    R --> COS["Cosine\nRetrieval"]
+    D --> COS
+    COS --> E["nDCG@10"]
+```
 
 ## How it works
 
-Two embedding models trained on similar data learn similar geometry. The spaces differ mainly by rotation. Procrustes alignment finds the optimal orthogonal matrix W:
+### Training
+
+Two embedding models trained on similar data learn similar geometry. The spaces differ mainly by rotation. Procrustes alignment finds the optimal orthogonal matrix W from calibration pairs:
 
 ```
 minimize  ||X_source @ W - X_target||_F   subject to  W^T W = I
@@ -18,7 +35,11 @@ Solution via SVD of M = X_source^T @ X_target:
     W = U @ Vt
 ```
 
-At inference: `e_adapted = e_source @ W`. Orthogonality preserves norms and angles, so cosine similarities transfer directly. Only d x d parameters, constrained to the orthogonal group - impossible to overfit even with few calibration samples.
+Only d x d parameters, constrained to the orthogonal group. Impossible to overfit even with few calibration samples.
+
+### Inference
+
+`e_adapted = e_source @ W`. Orthogonality preserves norms and angles, so cosine similarities transfer directly. One matrix multiply per query.
 
 ## Quick start
 
@@ -43,7 +64,9 @@ uv run adapter.py
 
 ## Results
 
-Evaluated across 12 model pairs on NanoBEIR (13 retrieval tasks, nDCG@10). Procrustes beats CCA, KRR, SGD linear maps, and MLP adapters on 9 of 12 pairs. MLP is consistently worst - embedding alignment is a linear problem.
+Evaluated across 12 model pairs on NanoBEIR (13 retrieval tasks, nDCG@10). Procrustes beats CCA, KRR, SGD linear maps, and MLP adapters on 9 of 12 pairs. MLP is consistently worst: embedding alignment is a linear problem.
+
+![Adapter performance heatmap](heatmap.png)
 
 Native baselines:
 
