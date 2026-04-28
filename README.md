@@ -6,7 +6,7 @@ Your embedding provider deprecated their model. You have billions of documents e
 
 A Procrustes adapter (one SVD, one matrix multiply) trained on 5000 calibration samples bridges embedding spaces with minimal quality loss - when the models are geometrically similar. No neural networks, no training loops, no GPUs.
 
-![Pipeline](pipeline.png)
+<img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/pipeline.png" alt="Pipeline">
 
 ## How it works
 
@@ -53,7 +53,7 @@ uv run adapter.py
 
 Evaluated across 12 model pairs on NanoBEIR (13 retrieval tasks, nDCG@10). Procrustes beats CCA, KRR, SGD linear maps, and MLP adapters on 9 of 12 pairs. MLP is consistently worst: embedding alignment is a linear problem.
 
-![Adapter performance heatmap](heatmap.png)
+<img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/heatmap.png" alt="Adapter performance heatmap">
 
 Native baselines:
 
