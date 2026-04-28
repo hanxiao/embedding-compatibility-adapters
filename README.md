@@ -1,8 +1,10 @@
 # Embedding Compatibility Adapters
 
+[[Report](report.pdf)]
+
 Your embedding provider deprecated their model. You have billions of documents embedded with the old one. Re-embedding costs thousands of dollars and days of compute.
 
-A Procrustes adapter (one SVD, one matrix multiply) trained on 5000 calibration samples bridges embedding spaces with minimal quality loss - when the models are geometrically similar. No neural networks, no training loops, no GPUs. [[Report](report.pdf)]
+A Procrustes adapter (one SVD, one matrix multiply) trained on 5000 calibration samples bridges embedding spaces with minimal quality loss - when the models are geometrically similar. No neural networks, no training loops, no GPUs.
 
 ```mermaid
 flowchart LR
