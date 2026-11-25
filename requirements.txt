@@ -1,0 +1,6 @@
+numpy
+scipy
+scikit-learn
+datasets
+matplotlib
+# torch is only needed for the two SGD control adapters

@@ -1,0 +1,15 @@
+\begin{tabular}{lrrrrr}
+\toprule
+method & nDCG@10 & /source & /target & wins & losses \\
+\midrule
+procrustes & 0.5244 & 0.805 & 0.810 & 0 & 0 \\
+affine & 0.5718 & 0.882 & 0.882 & 14 & 0 \\
+ridgecca & 0.5708 & 0.881 & 0.881 & 12 & 7 \\
+SGD-linear & 0.5360 & 0.827 & 0.827 & 7 & 26 \\
+SGD-mlp & 0.5232 & 0.807 & 0.807 & 7 & 28 \\
+krr-rbf & 0.4764 & 0.735 & 0.732 & 7 & 26 \\
+random & 0.0027 & 0.004 & 0.004 & 0 & 42 \\
+shuffled & 0.0035 & 0.005 & 0.005 & 0 & 42 \\
+identity & 0.0746 & 0.119 & 0.119 & 1 & 39 \\
+\bottomrule
+\end{tabular}

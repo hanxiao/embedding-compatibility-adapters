@@ -1,244 +1,173 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "numpy",
+#   "numpy",
 # ]
 # ///
-"""
-Embedding Compatibility Adapter - Procrustes Alignment
+"""Embedding compatibility adapters: one SVD, no training.
 
-Bridge incompatible embedding spaces with a single SVD.
-Takes two numpy arrays (source, target embeddings on shared calibration texts),
-returns the orthogonal rotation matrix that maps source -> target space.
+Two numbers decide what you need, and both come from the same few thousand
+paired texts before any map is fitted:
+
+  frame correlation rho  mean cosine between the two models' embeddings of the
+                         same text. Near zero means the spaces share no
+                         coordinate frame and a map is required; above ~0.1 the
+                         identity already retrieves something and a map adds
+                         little.
+  anisotropy kappa       ||mean|| / RMS(x - mean) for one model. A source with
+                         kappa above ~1 has a mean vector larger than its own
+                         spread, which breaks an uncentred rotation.
+
+Fit affine_align when kappa is high, procrustes_align when it is low.
 
 Usage as library:
-    W = procrustes_align(X_source, X_target)
-    adapted = apply_adapter(embeddings, W, target_dim)
+    W = procrustes_align(X_source, X_target)          # orthogonal
+    f = affine_align(X_source, X_target)              # centre + scale + rotation
+    adapted = f(embeddings)
+    print(diagnose(X_source, X_target))
 
-Usage standalone (runs synthetic demo):
-    uv run adapter.py
+Usage standalone (synthetic demo):  uv run adapter.py
 """
 
 import numpy as np
 
 
 # ---------------------------------------------------------------------------
-# Core: Procrustes alignment
+# Diagnostics, before fitting anything
 # ---------------------------------------------------------------------------
 
-def procrustes_align(X_source: np.ndarray, X_target: np.ndarray) -> np.ndarray:
-    """Find the orthogonal matrix W that best maps X_source -> X_target.
+def frame_correlation(X: np.ndarray, Y: np.ndarray) -> float:
+    """Mean cosine between paired embeddings after padding to a common width.
 
-    Solves the orthogonal Procrustes problem:
-        minimize  ||X_source @ W - X_target||_F
-        subject to  W^T W = I
-
-    Solution: SVD of the cross-covariance matrix M = X_source^T @ X_target.
-    W = U @ V^T from that SVD. This is the unique optimum.
-
-    Why it works: embedding models trained on similar data learn similar geometry.
-    The spaces differ mainly by rotation. Orthogonality preserves norms and angles,
-    so cosine similarities transfer directly.
-
-    Args:
-        X_source: (n, d_source) calibration embeddings from source model
-        X_target: (n, d_target) calibration embeddings from target model
-                  (same texts, same order)
-
-    Returns:
-        W: (d_padded, d_padded) orthogonal rotation matrix
+    Near 0: the two spaces are related by a rotation and nothing else, so the
+    identity map retrieves nothing and a map is needed.
+    Above ~0.1: the models share a coordinate frame, so part of the work is
+    already done and an adapter has less to add.
     """
-    n = X_source.shape[0]
-    assert X_target.shape[0] == n, "Source and target must have same number of samples"
+    d = max(X.shape[1], Y.shape[1])
+    Xp = np.pad(X, ((0, 0), (0, d - X.shape[1])))
+    Yp = np.pad(Y, ((0, 0), (0, d - Y.shape[1])))
+    Xp = Xp / np.maximum(np.linalg.norm(Xp, axis=1, keepdims=True), 1e-12)
+    Yp = Yp / np.maximum(np.linalg.norm(Yp, axis=1, keepdims=True), 1e-12)
+    return float(np.mean(np.sum(Xp * Yp, axis=1)))
 
-    d_source = X_source.shape[1]
-    d_target = X_target.shape[1]
-    d_max = max(d_source, d_target)
 
-    # Zero-pad the smaller dimension so both live in R^d_max
-    if d_source < d_max:
-        X_source = np.pad(X_source, ((0, 0), (0, d_max - d_source)))
-    if d_target < d_max:
-        X_target = np.pad(X_target, ((0, 0), (0, d_max - d_target)))
+def anisotropy(X: np.ndarray) -> float:
+    """||mean|| / RMS(x - mean). Above ~1 the mean dominates the spread."""
+    X = np.asarray(X, dtype=np.float64)
+    mu = X.mean(0)
+    resid = X - mu
+    rms = np.sqrt((resid ** 2).sum(1).mean())
+    return float(np.linalg.norm(mu) / max(rms, 1e-12))
 
-    # Cross-covariance matrix
-    M = X_source.T @ X_target  # (d_max, d_max)
 
-    # SVD gives the optimal rotation
-    U, S, Vt = np.linalg.svd(M, full_matrices=True)
-    W = U @ Vt
+def diagnose(X: np.ndarray, Y: np.ndarray) -> dict:
+    rho = frame_correlation(X, Y)
+    kx, ky = anisotropy(X), anisotropy(Y)
+    if rho > 0.1:
+        advice = "frames partly aligned: try the identity map first"
+    elif max(kx, ky) > 1.0:
+        advice = "frames orthogonal, one model anisotropic: use affine_align"
+    else:
+        advice = "frames orthogonal, low anisotropy: procrustes_align is enough"
+    return dict(rho=rho, kappa_source=kx, kappa_target=ky, advice=advice)
 
-    # Verify orthogonality
-    ortho_err = np.linalg.norm(W @ W.T - np.eye(d_max))
-    print(f"  Procrustes fit: d_source={d_source}, d_target={d_target}, "
-          f"padded={d_max}, ortho_error={ortho_err:.2e}")
 
-    # Residual: how well does W align the calibration data?
-    residual = np.linalg.norm(X_source @ W - X_target) / np.linalg.norm(X_target)
-    print(f"  Relative residual: {residual:.4f}")
+# ---------------------------------------------------------------------------
+# The maps
+# ---------------------------------------------------------------------------
 
-    return W
+def _procrustes(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+    U, _, Vt = np.linalg.svd(np.asarray(X, np.float64).T @ np.asarray(Y, np.float64),
+                             full_matrices=False)
+    return U @ Vt
+
+
+def procrustes_align(X_source: np.ndarray, Y_target: np.ndarray) -> np.ndarray:
+    """Orthogonal map W minimizing ||X W - Y||_F subject to W^T W = I.
+
+    One SVD of the cross-covariance, no hyperparameter, no iteration. When the
+    widths differ the result is semi-orthogonal and projects onto the smaller
+    space rather than padding.
+    """
+    return _procrustes(X_source, Y_target)
+
+
+class AffineMap:
+    """z_hat = mu_y + s * (z - mu_x) @ R, the map of the Plato's Key study."""
+
+    def __init__(self, R, s, mu_x, mu_y):
+        self.R, self.s, self.mu_x, self.mu_y = R, s, mu_x, mu_y
+
+    def __call__(self, X: np.ndarray) -> np.ndarray:
+        X = np.asarray(X, dtype=np.float64)
+        Z = (X - self.mu_x) @ self.R * self.s + self.mu_y
+        return Z / np.maximum(np.linalg.norm(Z, axis=1, keepdims=True), 1e-12)
+
+    def __repr__(self):
+        return f"AffineMap(s={self.s:.3f}, R={self.R.shape})"
+
+
+def affine_align(X_source: np.ndarray, Y_target: np.ndarray) -> AffineMap:
+    """Centre, rotate, rescale, re-centre.
+
+    The scale is the ratio of the two centred Frobenius norms, not a fitted
+    parameter. Without centring it is exactly 1 on L2-normalized embeddings.
+    """
+    X = np.asarray(X_source, np.float64)
+    Y = np.asarray(Y_target, np.float64)
+    mx, my = X.mean(0), Y.mean(0)
+    Xc, Yc = X - mx, Y - my
+    R = _procrustes(Xc, Yc)
+    s = float(np.linalg.norm(Yc) / max(np.linalg.norm(Xc), 1e-12))
+    return AffineMap(R, s, mx, my)
 
 
 def apply_adapter(embeddings: np.ndarray, W: np.ndarray, target_dim: int) -> np.ndarray:
-    """Apply Procrustes rotation and truncate/renormalize to target dimension.
-
-    Args:
-        embeddings: (n, d_source) source embeddings
-        W: rotation matrix from procrustes_align
-        target_dim: output dimension (d_target from original alignment)
-
-    Returns:
-        (n, target_dim) adapted embeddings, L2-normalized
-    """
-    d_emb = embeddings.shape[1]
-    d_w = W.shape[0]
-
-    if d_emb < d_w:
-        embeddings = np.pad(embeddings, ((0, 0), (0, d_w - d_emb)))
-
-    adapted = (embeddings @ W)[:, :target_dim]
-
-    # Re-normalize (rotation preserves norms, but padding + truncation may not)
-    norms = np.linalg.norm(adapted, axis=1, keepdims=True)
-    norms = np.maximum(norms, 1e-12)
-    return adapted / norms
+    """Rotate, truncate to target_dim, renormalize."""
+    X = np.asarray(embeddings, dtype=np.float64)
+    if X.shape[1] < W.shape[0]:
+        X = np.pad(X, ((0, 0), (0, W.shape[0] - X.shape[1])))
+    out = (X @ W)[:, :target_dim]
+    return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-12)
 
 
 # ---------------------------------------------------------------------------
-# Evaluation utilities (numpy only)
-# ---------------------------------------------------------------------------
-
-def cosine_similarity(A: np.ndarray, B: np.ndarray) -> np.ndarray:
-    """Cosine similarity matrix between rows of A and rows of B.
-
-    Both A and B should be L2-normalized for this to be a simple matmul.
-    """
-    # Normalize just in case
-    A = A / np.maximum(np.linalg.norm(A, axis=1, keepdims=True), 1e-12)
-    B = B / np.maximum(np.linalg.norm(B, axis=1, keepdims=True), 1e-12)
-    return A @ B.T
-
-
-def ndcg_at_k(ranked_ids: list[int], relevant_ids: set[int], k: int = 10) -> float:
-    """nDCG@k for a single query."""
-    dcg = sum(
-        1.0 / np.log2(i + 2)
-        for i, doc_id in enumerate(ranked_ids[:k])
-        if doc_id in relevant_ids
-    )
-    n_rel = min(len(relevant_ids), k)
-    idcg = sum(1.0 / np.log2(i + 2) for i in range(n_rel))
-    return dcg / idcg if idcg > 0 else 0.0
-
-
-def evaluate_retrieval(query_embs: np.ndarray, corpus_embs: np.ndarray,
-                       qrels: dict[int, set[int]], k: int = 10) -> float:
-    """Compute mean nDCG@k over all queries.
-
-    Args:
-        query_embs: (n_queries, d) query embeddings
-        corpus_embs: (n_corpus, d) corpus embeddings
-        qrels: mapping from query index -> set of relevant corpus indices
-
-    Returns:
-        Mean nDCG@k
-    """
-    sims = cosine_similarity(query_embs, corpus_embs)
-    scores = []
-    for qi, rel_set in qrels.items():
-        ranked = np.argsort(-sims[qi]).tolist()
-        scores.append(ndcg_at_k(ranked, rel_set, k))
-    return np.mean(scores) if scores else 0.0
-
-
-# ---------------------------------------------------------------------------
-# Synthetic demo
+# Demo
 # ---------------------------------------------------------------------------
 
 def run_demo():
-    """Demonstrate Procrustes alignment on synthetic data.
+    rng = np.random.default_rng(0)
+    d, rank, n = 256, 32, 4000
+    basis = np.linalg.qr(rng.standard_normal((d, rank)))[0]
 
-    Real embeddings live on a low-dimensional manifold (not random in R^d).
-    We simulate this with embeddings drawn from a rank-32 subspace, then
-    rotated + lightly noised to create the "target" space. This mirrors
-    how same-family models share geometric structure.
-    """
-    rng = np.random.default_rng(42)
+    def make(n):
+        e = rng.standard_normal((n, rank)) @ basis.T
+        return e / np.linalg.norm(e, axis=1, keepdims=True)
 
-    d = 128           # same dimension for simplicity
-    rank = 32         # intrinsic dimensionality (realistic for embeddings)
-    noise = 0.02      # small perturbation (models trained on similar data)
-    n_cal = 2000
-    n_queries = 100
-    n_corpus = 5000
+    def shift_and_rotate(E, mu_scale):
+        mu = rng.standard_normal(d)
+        mu = mu_scale * mu / np.linalg.norm(mu)
+        R, _ = np.linalg.qr(rng.standard_normal((d, d)))
+        Z = (E + mu) @ R
+        return Z / np.linalg.norm(Z, axis=1, keepdims=True)
 
-    print("=" * 60)
-    print("Procrustes Adapter - Synthetic Demo")
-    print(f"  dim={d}, intrinsic_rank={rank}, noise={noise}")
-    print(f"  calibration={n_cal}, queries={n_queries}, corpus={n_corpus}")
-    print("=" * 60)
+    X = make(n)
+    Y = shift_and_rotate(X, 0.0)          # rotation only
+    Y2 = shift_and_rotate(X, 1.2)         # rotation plus a dominant mean
 
-    # Shared low-rank basis (the "semantic structure" both models capture)
-    basis = np.linalg.qr(rng.standard_normal((d, rank)))[0]  # (d, rank) orthonormal
-
-    # Ground-truth rotation between the two spaces
-    R_true, _ = np.linalg.qr(rng.standard_normal((d, d)))
-
-    def make_embeddings(n):
-        """Generate structured embeddings on a low-rank manifold."""
-        coords = rng.standard_normal((n, rank))
-        embs = coords @ basis.T  # project into d-dimensional space
-        norms = np.maximum(np.linalg.norm(embs, axis=1, keepdims=True), 1e-12)
-        return embs / norms
-
-    def to_target(source):
-        """Simulate target model: rotate + light noise, then normalize."""
-        target = source @ R_true + rng.normal(0, noise, source.shape)
-        norms = np.maximum(np.linalg.norm(target, axis=1, keepdims=True), 1e-12)
-        return target / norms
-
-    # Calibration data
-    cal_source = make_embeddings(n_cal)
-    cal_target = to_target(cal_source)
-
-    # Step 1: Train adapter
-    print("\n[1] Training Procrustes adapter on calibration data")
-    W = procrustes_align(cal_source, cal_target)
-
-    # Step 2: Test data (disjoint from calibration)
-    print("\n[2] Generating test queries and corpus")
-    query_source = make_embeddings(n_queries)
-    corpus_source = make_embeddings(n_corpus)
-    query_target = to_target(query_source)
-    corpus_target = to_target(corpus_source)
-
-    # Relevance labels: top-5 nearest neighbors in native target space
-    true_sims = cosine_similarity(query_target, corpus_target)
-    qrels = {i: set(np.argsort(-true_sims[i])[:5].tolist()) for i in range(n_queries)}
-
-    # Step 3: Evaluate
-    print("\n[3] Evaluating retrieval (nDCG@10)")
-
-    score_native = evaluate_retrieval(query_target, corpus_target, qrels)
-    print(f"  Native target:    nDCG@10 = {score_native:.4f}")
-
-    score_no_adapter = evaluate_retrieval(query_target, corpus_source, qrels)
-    print(f"  No adapter:       nDCG@10 = {score_no_adapter:.4f}")
-
-    corpus_adapted = apply_adapter(corpus_source, W, d)
-    score_adapted = evaluate_retrieval(query_target, corpus_adapted, qrels)
-    print(f"  With adapter:     nDCG@10 = {score_adapted:.4f}")
-
-    retention = score_adapted / score_native * 100 if score_native > 0 else 0
-    print(f"\n  Retention: {retention:.1f}% of native target quality")
-
-    print("\n" + "=" * 60)
-    print("The adapter recovers most of the native retrieval quality")
-    print("from a simple orthogonal rotation trained on calibration data.")
-    print("=" * 60)
-
-    return W
+    for name, YY in (("rotation only", Y), ("rotation + mean", Y2)):
+        diag = diagnose(X, YY)
+        W = procrustes_align(X, YY)
+        f = affine_align(X, YY)
+        cos = lambda A, B: float(np.mean(np.sum(A * B, 1)))
+        print(f"\n{name}")
+        print(f"  rho={diag['rho']:+.3f} kappa_source={diag['kappa_source']:.2f} "
+              f"kappa_target={diag['kappa_target']:.2f}")
+        print(f"  identity  cosine {cos(X, YY):+.3f}")
+        print(f"  procrustes cosine {cos(apply_adapter(X, W, d), YY):+.3f}")
+        print(f"  affine     cosine {cos(f(X), YY):+.3f}")
+        print(f"  {diag['advice']}")
 
 
 if __name__ == "__main__":

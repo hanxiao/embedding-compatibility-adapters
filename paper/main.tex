@@ -1,0 +1,290 @@
+\documentclass{article}
+\usepackage[preprint]{neurips_2025}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\hypersetup{hidelinks}
+
+\title{Cross-Model Embedding Adapters, Measured on Retrieval}
+
+\makeatletter\renewcommand{\@noticestring}{}\makeatother
+\author{Han Xiao \\
+Jina AI \textit{by} Elastic \\
+\texttt{han.xiao@jina.ai}}
+
+\newcommand{\TBD}[1]{\textcolor{red}{[#1]}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A closed-form map between two embedding spaces costs one SVD and is meant to restore retrieval across a model switch without re-embedding. We measure what it restores: 42 directed pairs from seven embedding models of five families, 13 NanoBEIR tasks, and three numbers per pair, the source model on its own index, the adapted query on the target index, and the target model natively. A rotation recovers 0.81 of the source model's nDCG@10 and beats the source index on 1 of 42 pairs, and that pair is the one where the two models are nearly the same model. Adding the centring term and global scale of the affine form used in the Platonic Representation Hypothesis raises the mean to 0.88 and wins 18 of 42 pairs against the rotation. Most of that gain sits on pairs whose coordinate frames are partially aligned, and frame alignment is measurable in one number, the mean cosine of paired calibration embeddings: it correlates 0.95 with how well doing nothing works and $-0.91$ with what the map adds. CKA, the geometric gate used in earlier work, correlates $-0.21$ with the first and 0.35 with retention overall, and within one model family, where the frames are orthogonal by construction, it predicts retention at $r=0.74$. Retention is directional and 0.50 of its variance is antisymmetric, so no symmetric predictor can explain it. Chaining two maps through a third model keeps a median 0.98 of the direct map, a single generalized-Procrustes hub loses 0.053 to pairwise fitting, and a projection to 128 components per model already matches the full-rank fit.
+\end{abstract}
+
+\section{Introduction}
+
+Switching embedding models breaks a retrieval index. Queries from the old model no longer match documents encoded by the new one, and re-embedding a large corpus costs days of compute. A map fitted on a few thousand paired texts repairs the mismatch without touching either model. The map is closed form, one SVD, and it has been known since the word-translation literature that an orthogonal rotation solves it when the two spaces are close \citep{conneau2018word,artetxe2018vecmap}.
+
+Two recent results sharpen the question. \citet{achara2026multiway} show that a strict isometry is the wrong objective for retrieval, and that a non-isometric multi-way projection gains more than a better rotation. \citet{vejendla2025drift} report that on same-family pairs a closed-form rotation recovers 0.974 of the new model's Recall@10, close to what a trained MLP recovers. Neither reports the number a deployment needs, which is whether the adapted query beats keeping the old index at all; \citet{zhao2026bill} do report it, on 14 model pairs, and find the bridge usually loses to the old model.
+
+We take the evaluation design of the Platonic Representation Hypothesis study of LLM hidden states \citep{platoskey2026} and apply it to text embeddings. That study fits an affine map on paired keys, selects its operating point on validation data by the downstream metric rather than by a geometric one, and reports chaining, low-rank compression and the recovery of failures the recipient model cannot produce alone. We keep the retrieval setting of the earlier cross-model adapter study \citep{xiao2026adapters}, extend it from four models of one family to seven models of five families, and change the protocol.
+
+Our contributions are measurements, not a new estimator.
+\begin{itemize}
+\item A three-number table per pair, source index, adapted query, target index, over 42 directed pairs, so the migration decision can be read off directly (\S\ref{sec:main}).
+\item The observation that what a map must fix is the coordinate frame, not the geometry, and that the frame is measurable in one number which no rotation-invariant similarity captures (\S\ref{sec:frame}).
+\item The affine map of the Platonic Representation Hypothesis evaluated on retrieval, with its centring and scale ablated, and the mechanism for why the uncentred rotation underperforms (\S\ref{sec:affine}).
+\item Chaining, a multi-way hub, low-rank compression, calibration size and failure recovery, each measured on the same 42 pairs (\S\ref{sec:structure}).
+\end{itemize}
+
+\section{Method}
+
+\paragraph{Notation.} $\mathbf{X}\in\mathbb{R}^{n\times d_s}$ and $\mathbf{Y}\in\mathbb{R}^{n\times d_t}$ are embeddings of the same $n$ calibration texts by the source and target model. $\mathbf{q}$ is a query from the source model, $\mathbf{d}$ a document embedded by the target. All vectors are L2-normalized before scoring, and retrieval uses cosine similarity against the target's own corpus embeddings.
+
+\paragraph{Orthogonal.} The map minimizes $\lVert\mathbf{X}\mathbf{R}-\mathbf{Y}\rVert_F$ over $\mathbf{R}^\top\mathbf{R}=\mathbf{I}$. With $\mathbf{X}^\top\mathbf{Y}=\mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$, the solution is $\mathbf{R}=\mathbf{U}\mathbf{V}^\top$. When $d_s\neq d_t$ the same formula returns a semi-orthogonal map of shape $d_s\times d_t$: it projects onto the smaller space rather than padding.
+
+\paragraph{Affine.} The form fitted in the Plato's Key study,
+\begin{equation}
+\hat{\mathbf{z}}_B=\boldsymbol{\mu}_B+s\,\mathbf{R}\,(\mathbf{z}_A-\boldsymbol{\mu}_A),\qquad
+s=\frac{\lVert\tilde{\mathbf{Z}}_B\rVert_F}{\lVert\tilde{\mathbf{Z}}_A\rVert_F},
+\end{equation}
+where $\tilde{\mathbf{Z}}$ denotes a centred key matrix and $\mathbf{R}$ is the orthogonal solution on the centred matrices. We ablate the two additions: centring on or off, and the global scale on or off, which gives four candidates fitted per pair.
+
+\paragraph{Two-sided.} Ridge CCA at rank $k$ projects both sides into a shared $k$-dimensional space, $\mathbf{q}\mapsto(\mathbf{q}-\boldsymbol{\mu}_X)\mathbf{A}_x$ and $\mathbf{d}\mapsto(\mathbf{d}-\boldsymbol{\mu}_Y)\mathbf{A}_y$, with $\mathbf{A}_x,\mathbf{A}_y$ from the top-$k$ singular triplets of the whitened cross-covariance. Unlike a one-sided map it is not a change of coordinates, and it is the family that \citet{achara2026multiway} find better for retrieval.
+
+\paragraph{Learned.} Two gradient-trained controls, a linear map and a 3-layer MLP, both trained with InfoNCE on the same paired data, so the closed forms can be compared against what training buys.
+
+\paragraph{Controls.} A random semi-orthogonal map, a Procrustes fit on shuffled pairs, and the identity map with padding or truncation. All are evaluated at the same operating point as the method they control for.
+
+\section{Experimental setup}
+
+\paragraph{Models.} Seven embedding models from five families, spanning 768 to 2048 dimensions: jina-embeddings-v3, v4, v5-text-nano and v5-text-small; Qwen3-Embedding-0.6B; bge-m3; multilingual-e5-large-instruct. Each is used with its recommended query instruction, and with no instruction for documents. This gives 42 directed pairs, 21 unordered, of which 21 expand and 21 compress.
+
+\paragraph{Data.} Thirteen NanoBEIR tasks, 649 queries and 56{,}723 documents. Every task's queries are split at random, one third for validation and two thirds for test, once, and the same split is used for every pair. The test split holds 429 queries.
+
+\paragraph{Calibration.} 5{,}000 texts from AG News with zero overlap against any evaluation text, the first half embedded in query mode and the second half in passage mode, so the calibration covers both roles a text plays at retrieval time. Every map is fitted on these pairs only.
+
+\paragraph{Selection.} Every method with a free parameter selects it on the validation queries by nDCG@10, and the chosen setting is reported on test. The parameters are the CCA rank ($k\in\{32,\dots,512\}$), the affine variant (four), and the kernel bandwidth and ridge term for kernel regression. Orthogonal Procrustes has nothing to select. This follows the Plato's Key protocol, where selecting an operating point by a geometric proxy gave a tenth of the accuracy of selecting by the downstream metric.
+
+\paragraph{Metrics.} nDCG@10 per task, averaged over the 13 tasks. Significance is a Wilcoxon signed-rank test over the 13 task means for each pair, at $\alpha=0.05$, counted separately for wins and losses.
+
+\section{Results}
+
+\subsection{Three numbers per pair}
+\label{sec:main}
+
+Table~\ref{tab:matrix} gives the adapted nDCG@10 for every directed pair, Figure~\ref{fig:heatmap} the same numbers as a fraction of the source score, and Table~\ref{tab:native} the natives. A rotation fitted on 5{,}000 paired texts recovers 0.81 of the source model's nDCG@10 on average, with a range from 0.15 to 1.01 across pairs, and it beats the source index on 1 of 42 pairs. That pair, v5-nano to v5-small, is a pair of consecutive checkpoints of one family where the adapted query scores 0.6838 against the source's 0.6800. Everywhere else migration with a bridge costs the old index between 0.04 and 0.51 nDCG.
+
+The target's own score is a poor denominator. The adapted query reaches 0.81 of it, but that ratio is governed by how much better the target is, not by the map: the six pairs sourced from e5-large reach 0.32 to 0.96 of the target while their source ratios span the same range.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.42\linewidth]{figs/heatmap.pdf}
+\caption{Adapted nDCG@10 as a fraction of the source model's own score, by orthogonal Procrustes. One row per source, one column per target. Green is a migration that keeps the old index's quality, red is a loss.}
+\label{fig:heatmap}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{nDCG@10 on the 429 held-out queries, adapted by orthogonal Procrustes. Diagonal entries are the model's native score.}
+\label{tab:matrix}
+\input{tabs/tab_matrix}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Native nDCG@10 of each model on its own index, over all 649 queries and over the 429 held-out ones. The four jina models reproduce the all-query numbers of the earlier report \citep{xiao2026adapters}.}
+\label{tab:native}
+\input{tabs/tab_native}
+\end{table}
+
+\subsection{What the map has to fix is the frame}
+\label{sec:frame}
+
+CKA is invariant to rotation, so it cannot distinguish two spaces that differ by a rotation from two spaces that do not. The second quantity is what a map actually repairs, and it has a one-number estimator: the mean cosine between the two models' embeddings of the same calibration text, $\rho=\frac{1}{n}\sum_i\langle\mathbf{x}_i,\mathbf{y}_i\rangle$, after padding to a common width.
+
+Across the 42 pairs $\rho$ takes 34 values below 0.02, 4 between 0.10 and 0.25, and 4 above 0.25. In those buckets the identity map, which pads or truncates and nothing else, scores 0.003, 0.250 and 0.509 nDCG@10 respectively. $\rho$ correlates 0.95 with the identity score and $-0.91$ with what the map adds over the identity, while CKA correlates $-0.21$ with the identity score. Two pairs make the point. v5-nano and v5-small have CKA 0.958 and $\rho=-0.001$: nearly the same geometry, no shared frame, and the identity retrieves nothing. jina-v3 and bge-m3 have CKA 0.729 and $\rho=0.325$: less similar geometry, a shared frame, and the identity already reaches 0.542 against a source score of 0.640.
+
+The shared frame appears between models built on the same pretrained encoder family. jina-v3, bge-m3 and e5-large are all XLM-R large variants and every pair among them has $\rho$ between 0.17 and 0.38; the Qwen-family models share a frame with each other ($\rho\approx 0.11$) and with nothing else.
+
+\subsection{The affine form, and when a rotation is not enough}
+\label{sec:affine}
+
+\begin{table}[t]
+\centering
+\caption{Adapter families over 42 pairs. Wins and losses count pairs where a Wilcoxon test over the 13 task means favours the method or Procrustes at $p<0.05$.}
+\label{tab:families}
+\input{tabs/tab_families}
+\end{table}
+
+Table~\ref{tab:families} ranks the families. The affine form is the best closed-form map: 0.5718 mean nDCG@10 against 0.5244 for the rotation. It improves on the rotation on 18 of 42 pairs and worsens on 2, and 14 of those gains and none of those losses survive a Wilcoxon test over the 13 task means. Ridge CCA is level with it on the mean, 0.5708, but reaches 12 significant wins and 7 significant losses, so it trades large gains on some pairs for large losses on others. Both gradient-trained maps sit below the closed forms, 0.5360 and 0.5232, and kernel ridge regression below both at 0.4764. The three controls sit at chance, 0.0027 for a random semi-orthogonal map and 0.0035 for a Procrustes fitted on shuffled pairs, except for the identity map whose 0.0746 is the frame effect of \S\ref{sec:frame} averaged over pairs.
+
+\begin{table}[t]
+\centering
+\caption{Same methods split by whether the map expands ($d_s\le d_t$, 21 pairs) or compresses (21 pairs).}
+\label{tab:direction}
+\input{tabs/tab_direction}
+\end{table}
+
+The rotation's weakness is directional (Table~\ref{tab:direction}). It scores 0.4749 when the map expands and 0.5739 when it compresses, a gap of 0.099; the affine form scores 0.5650 and 0.5786 and closes the gap to 0.014. The pairs the affine form wins are concentrated in the expanding half, where the rotation is weakest.
+
+Two properties of the fitted map explain it. Without centring the global scale is exactly one, because both sides are L2-normalized and therefore have equal Frobenius norm; the 22 pairs that selected the uncentred variant record $s=1.000$ to three decimals. With centring, $s$ becomes the ratio of centred spreads and ranges from 1.00 to 2.01 across our pairs, so it is measuring how differently anisotropic the two spaces are. Anisotropy is also what breaks the uncentred rotation. Writing $\kappa=\lVert\boldsymbol{\mu}\rVert/\mathrm{RMS}(\mathbf{x}-\boldsymbol{\mu})$ for a model's mean norm over its centred spread, $\kappa$ is 0.27 for jina-v3, 0.34 for v5-small, 0.50 for Qwen3-0.6B, 0.74 for bge-m3, 0.99 for v4 and 1.83 for e5-large. The gain of the affine form over the rotation correlates 0.87 with the source model's $\kappa$: it is 0.000 over the 18 pairs whose source has $\kappa<0.4$, 0.017 over the 18 with $\kappa$ between 0.4 and 1.0, and 0.280 over the 6 with $\kappa>1$. When the mean vector is larger than the spread around it, the uncentred cross-covariance is dominated by the mean-mean term and the fitted rotation aligns the means instead of the residual semantics; centring removes that term and the scale restores the ratio.
+
+\subsection{No symmetric predictor can work}
+\label{sec:predictor}
+
+\begin{table}[t]
+\centering
+\caption{Correlation of each diagnostic with the identity baseline, with what the map adds over it, and with the antisymmetric part of retention over unordered pairs.}
+\label{tab:predictors}
+\input{tabs/tab_predictors}
+\end{table}
+
+Retention is directional: $R(A\to B)$ and $R(B\to A)$ differ, often by more than 0.3. Decomposing $R$ over unordered pairs into a symmetric part $(R_{AB}+R_{BA})/2$ and an antisymmetric part $(R_{AB}-R_{BA})/2$, the antisymmetric part carries 0.497 of the variance. Every geometric similarity is symmetric by construction, so no such measure can explain more than the other half, and the observed correlation with the antisymmetric part is zero for all of them (Table~\ref{tab:predictors}). The one directional feature in the table, the gap between the two fit residuals, is the only one with a nonzero entry there, which is what the decomposition should give.
+
+CKA correlates 0.35 with retention over all 42 pairs. Within the 12 jina pairs alone it correlates 0.74, which is the regime the earlier report measured: those models have $\rho\approx 0$ and their frames are orthogonal, so the only remaining variation is geometric. Across families the correlation falls, and over the 6 pairs among the non-jina models it is $-0.64$, the wrong sign.
+
+\subsection{Chaining, a hub, and how small the map can be}
+\label{sec:structure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.46\linewidth]{figs/chain.pdf}
+\hfill
+\includegraphics[width=0.46\linewidth]{figs/lowrank.pdf}
+\caption{Left: chained two-hop map against the direct map over all 210 ordered triples. Right: nDCG@10 against the number of principal components kept per model, relative to full rank; thin lines are pairs, the heavy line is their mean.}
+\label{fig:structure}
+\end{figure}
+
+Of the 210 ordered triples the chained map retains a median 0.983 of the direct map, with a tenth percentile of 0.935, a minimum of 0.833 and 88\% of triples above 0.95 (Figure~\ref{fig:structure}, left). The composition never runs the middle model. This reproduces the 99\% reported for chained rotations between LLM hidden states \citep{platoskey2026} on a different substrate, which is the strongest evidence we have that the spaces really are views of one another rather than pairwise compatible by accident.
+
+A single shared space is a different matter. Fitting one generalized-Procrustes universe with one map per model, so that any pair is scored as a composition through the hub, loses 0.053 nDCG@10 to pairwise fitting and wins on none of the 42 pairs. The loss concentrates on e5-large, the most anisotropic model, at $-0.10$ on each of its outgoing pairs, and is smallest where the frames are aligned. Our models span 768 to 2048 dimensions, so a 2048-dimensional universe forces the narrow models into subspaces of it; the multi-way study that reports parity between hub and pairwise fitting uses models of one width \citep{achara2026multiway}.
+
+\begin{table}[t]
+\centering
+\caption{Low rank: principal components kept per model.}
+\label{tab:lowrank}
+\input{tabs/tab_lowrank}
+\end{table}
+
+Projecting both sides onto the top $k$ principal components of the centred calibration data before fitting costs nothing until $k$ falls below 128 (Table~\ref{tab:lowrank}). On the 30 pairs where every model is at least 1024 wide, 128 components reach 0.93 of the full-rank score, 256 reach 1.24 and 384 reaches 1.27, so the projection is not only a compression. The gain is the anisotropy effect again: it correlates 0.85 with the source model's $\kappa$, it is $-0.010$ over the pairs with $\kappa<0.4$ and $+0.249$ over those with $\kappa>1$. The first principal component of an uncentred embedding matrix is its mean direction, so truncating it centres the data, which is what \S\ref{sec:affine} showed a rotation needs.
+
+\begin{table}[t]
+\centering
+\caption{Calibration size.}
+\label{tab:calsize}
+\input{tabs/tab_calsize}
+\end{table}
+
+The calibration curve is monotone and shallow (Table~\ref{tab:calsize}). 100 pairs give 0.097 nDCG@10, 500 give 0.407, 1{,}000 give 0.473 and 5{,}000 give 0.524, so the first 1{,}000 pairs buy 90\% of what 5{,}000 buy and the last 2{,}500 buy 0.013. Published adapters fix this budget between 100 anchors and 20{,}000 document pairs without a curve; ours says the useful range is 500 to 2{,}500.
+
+\subsection{What a failed retrieval keeps}
+
+For each pair and query we record the documents retrieved in the top ten by the source model natively, by the target natively, and by the adapted query. The recoverable set is the documents only the source retrieves, the case where the target's own key fails but the information exists in the corpus. Over the 42 pairs the rotation recovers a mean 0.28 of that set, ranging from 0.15 to 0.46, while dropping a mean 0.25 of the documents the target retrieves natively. On the near-identical pair v5-nano to v5-small the loss is 0.067 and the recovery 0.303. The numbers are of the same order as the 18\% recovery of dark memories reported for LLM hidden states \citep{platoskey2026}, which suggests that the phenomenon is not specific to the key-value structure of a transformer.
+
+\begin{table}[t]
+\centering
+\caption{Recoverable failures under the rotation, per pair.}
+\label{tab:failures}
+\input{tabs/tab_failures}
+\end{table}
+
+\section{Discussion}
+
+The practical question is not how close an adapter brings you to the new model but whether it beats keeping the old one, and on 42 pairs the answer is no except where the two models are nearly the same model. A rotation recovers 0.81 of the source index's nDCG@10 and an affine map 0.88. Migration with a bridge therefore costs between 4 and 51 points of nDCG on the documents the old index already serves, and pays back only on documents the new model handles better. That is the trade \citet{zhao2026bill} describe. Their break-even analysis puts the bar where a bridge has to reach 91.9\% to 99.2\% of the new model's recall to be worth the switch. The source sits inside that band on 14 of our pairs, and the bridge beats the source on none of them; the rotation reaches 91.9\% of the target on 14 pairs and 99.2\% on one.
+
+Three numbers computed on a few thousand paired texts predict the outcome, and none of them is CKA.
+The frame correlation $\rho$ says whether a map is needed at all, since the identity already scores 0.25 to 0.51 when $\rho$ exceeds 0.1.
+The anisotropy $\kappa$ says whether a rotation is enough, since the affine form gains nothing when $\kappa<0.4$ and 0.28 when $\kappa>1$.
+The direction says which failure to expect, since an expanding map loses 0.10 nDCG under a pure rotation.
+All three are computable before fitting, from the same calibration set, in seconds.
+
+This also explains why the earlier report's CKA gate looked sound. Within four checkpoints of one vendor the frames are orthogonal and $\kappa$ is low, so CKA is the only quantity that varies, and it correlates 0.74 with retention. Add models from other lineages and the variation moves into $\rho$ and $\kappa$, where CKA is blind by construction.
+
+The result that survives most cleanly is the recovery number. Of the documents only the source model retrieves, a rotated query recovers 0.28 on average while dropping 0.25 of the documents the target retrieves natively. For an operator the interesting quantity is not the mean nDCG but whether the queries the old model answered still work, and that is a per-query property the aggregate hides. The 18\% recovery reported for dark memories in LLM hidden states is of the same order, which suggests the mechanism, a shared geometry that a coordinate change can reach, is not specific to transformers' key-value structure.
+
+\section*{Limitations}
+
+The evaluation is NanoBEIR, 50 queries per task and 429 held-out queries, so per-pair differences below about 0.02 nDCG are noise and the per-pair win counts should be read as counts, not as effects. One calibration distribution, AG News, serves all 42 pairs; a domain-matched calibration set might change the ranking of methods, and the 5{,}000-pair budget was inherited from bilingual induction rather than chosen.
+The query split uses one seed, and the operating points are selected on 17 validation queries per task, so the selection is itself noisy.
+We adapt the query and keep the target's index native. Converting the corpus into the new space instead is equivalent only for an orthogonal map; for the affine form the two deployments differ, and corpus-side conversion is what a re-embedding migration would actually run.
+Seven models is a small sample for correlations quoted to two decimals, and three of them come from one vendor.
+
+\section{Related work}
+
+\paragraph{Rotations between embedding spaces.} Orthogonal Procrustes on paired vectors goes back to bilingual lexicon induction, where \citet{conneau2018word} fit a rotation on a seed dictionary and refined it with an induced one, and \citet{artetxe2018vecmap} alternated the closed form with stochastic dictionary induction to reach 48.13 P@1 on en-it against 13.55 for the earlier code. \citet{grave2018wasserstein} replaced the pairing with a Wasserstein-Procrustes objective that needs no dictionary, and \citet{alaux2019umh} generalized the construction to several spaces at once. None of these is a retrieval study.
+
+\paragraph{Retrieval with a bridge.} \citet{vejendla2025drift} fit 20{,}000 document pairs and report an adapter-to-new-model recall ratio of 0.974 for the closed-form rotation, 0.983 for a low-rank affine map and 0.992 for a residual MLP, on a 1M-item index. \citet{zhao2026bill} change the denominator: they score the bridge against the old index and find it serves 0.019 to 0.784 Recall@10 below the source across 14 pairs, so the honest comparison is not approaching the new model but beating the old one. \citet{maekawa2026align} print the closed-form control on MAIR, 51.13 nDCG@10 against 51.62 for their fully trained symmetric pipeline on 126 tasks, and \citet{yoon2025converter} train a four-layer converter to 0.5362 nDCG@10 on 13 BEIR datasets against 0.5609 for the target model natively. \citet{chivukula2026era} train a projection on 100 to 4{,}000 anchor documents and report five BEIR datasets without a Procrustes row.
+
+\paragraph{Multi-space alignment.} \citet{achara2026multiway} replace pairwise maps with a generalized Procrustes universe and report that the strict isometry moves cross-lingual rank-1 by 0.001 to 0.003 over pairwise fitting, while a non-isometric multiset CCA gains 0.057 and a trained residual corrector another 0.016. Their setting is language-specific BERTs and rank-1 translation; the shared universe has not been scored on text retrieval.
+
+\paragraph{Unpaired maps.} \citet{moschella2023relative} avoid fitting entirely by representing each item as its similarities to a fixed set of anchors, which is invariant to any angle-preserving transform. \citet{jha2025vec2vec} train adversarially with cycle consistency when no pairs exist, and \citet{sui2026unicon} show that a contrastive objective admits a closed-form spectral solution.
+
+\paragraph{The Platonic Representation Hypothesis.} \citet{platoskey2026} fit an affine map between the hidden states of independently trained LLMs and show that a single rotated key transfers factual recall, composes through a third model, survives compression to 256 components, and recovers 18\% of the recipient's dark memories. \citet{maiorca2023latent} had shown the same rotation class suffices for stitching encoders and decoders, and that a gradient-trained affine map buys nothing over it.
+
+\section{Discussion}
+
+
+
+\section*{Limitations}
+
+
+
+\bibliographystyle{plainnat}
+\begin{thebibliography}{99}
+
+\bibitem[Alaux et al.(2019)]{alaux2019umh}
+Alaux, J., Grave, E., Cuturi, M., Joulin, A. (2019). Unsupervised hyperalignment for multilingual word embeddings. ICLR.
+
+\bibitem[Achara et al.(2026)]{achara2026multiway}
+Achara, A. et al. (2026). Multi-way representation alignment. arXiv:2602.06205.
+
+\bibitem[Artetxe et al.(2018)]{artetxe2018vecmap}
+Artetxe, M., Labaka, G., Agirre, E. (2018). A robust self-learning method for fully unsupervised cross-lingual mappings of word embeddings. ACL. arXiv:1805.06297.
+
+\bibitem[Chivukula et al.(2026)]{chivukula2026era}
+Chivukula, et al. (2026). ERA: embedding replacement adapters. arXiv:2611.26919.
+
+\bibitem[Conneau et al.(2018)]{conneau2018word}
+Conneau, A., Lample, G., Ranzato, M., Denoyer, L., J\'egou, H. (2018). Word translation without parallel data. ICLR. arXiv:1710.04087.
+
+\bibitem[Grave et al.(2019)]{grave2018wasserstein}
+Grave, E., Joulin, A., Berthet, Q. (2019). Unsupervised alignment of embeddings with Wasserstein Procrustes. AISTATS. arXiv:1805.11222.
+
+\bibitem[Jha et al.(2025)]{jha2025vec2vec}
+Jha, et al. (2025). vec2vec: text embeddings are secretly aligned. NeurIPS. arXiv:2505.12540.
+
+\bibitem[Maekawa et al.(2026)]{maekawa2026align}
+Maekawa, et al. (2026). Align then adapt. EMNLP. arXiv:2604.03403.
+
+\bibitem[Maiorca et al.(2023)]{maiorca2023latent}
+Maiorca, V., Moschella, L., Norelli, A., Fumero, M., Locatello, F., Rodol\`a, E. (2023). Latent space translation via semantic alignment. NeurIPS. arXiv:2311.00664.
+
+\bibitem[Moschella et al.(2023)]{moschella2023relative}
+Moschella, L., Maiorca, V., Fumero, M., Norelli, A., Locatello, F., Rodol\`a, E. (2023). Relative representations enable zero-shot latent space communication. ICLR. arXiv:2209.15430.
+
+\bibitem[Sui et al.(2026)]{sui2026unicon}
+Sui, H., Wang, Y., Do, M. N. (2026). UniCon: unified framework for efficient contrastive alignment via kernels. ICLR. arXiv:2604.16678.
+
+\bibitem[Vejendla(2025)]{vejendla2025drift}
+Vejendla, (2025). Drift-Adapter. EMNLP. arXiv:2509.23471.
+
+\bibitem[Xiao(2026)]{xiao2026adapters}
+Xiao, H. (2026). Cross-model embedding adapters: forward and backward compatibility without re-embedding. Technical report.
+
+\bibitem[Yoon and Ar{\i}k(2025)]{yoon2025converter}
+Yoon, Ar{\i}k (2025). Embedding converter. ACL.
+
+\bibitem[Zhao et al.(2026)]{zhao2026bill}
+Zhao, et al. (2026). When the bill falls due. arXiv:2611.20702.
+
+\bibitem[Cheng et al.(2026)]{platoskey2026}
+Cheng, V., Liu, J., Yau, M., HazyResearch (2026). Plato's Key. Blog post, 25 November 2026.
+
+\end{thebibliography}
+
+\end{document}
