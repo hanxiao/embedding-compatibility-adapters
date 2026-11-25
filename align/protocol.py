@@ -121,7 +121,7 @@ class Study:
 
 
 def failure_stats(src_hits, tgt_hits, adp_hits):
-    """Dark-memory analogue over aligned per-query hit sets.
+    r"""Dark-memory analogue over aligned per-query hit sets.
 
     recoverable = |A & (S \ T)| / |S \ T|   docs only the source model retrieves
     loss        = |T \ A| / |T|             native target hits the adapter drops
