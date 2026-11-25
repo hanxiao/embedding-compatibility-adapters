@@ -62,6 +62,7 @@ def fig_heatmap(D, out):
     ax.set_yticks(range(len(ORDER)), [SHORT[m] for m in ORDER])
     ax.set_xlabel("target")
     ax.set_ylabel("source")
+    ax.set_title("ours, orthogonal Procrustes", fontsize=8.5, color=INK, loc="left", pad=6)
     for i in range(len(ORDER)):
         for j in range(len(ORDER)):
             if i == j:

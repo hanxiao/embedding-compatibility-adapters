@@ -28,12 +28,12 @@ The two rows share the estimator: a cross-covariance of paired representations, 
 
 ## What a bridge actually buys
 
-42 directed pairs, seven models from five families, 13 NanoBEIR tasks, 5,000 calibration texts, 429 held-out queries. Three numbers per pair, the old model on its own index, the adapted query on the new index, and the new model natively.
+42 directed pairs, seven models from five families, 13 NanoBEIR tasks, 5,000 calibration texts, 429 held-out queries. Three numbers per pair, the old model on its own index, the adapted query on the new index, and the new model natively. The two rows marked ours and Plato's Key are the two maps of the figure above; the rest are alternatives and controls.
 
 | method | nDCG@10 | of source | of target | significant wins | significant losses |
 |---|---|---|---|---|---|
-| orthogonal Procrustes | 0.5244 | 0.805 | 0.810 | - | - |
-| affine (centre + scale + rotation) | 0.5718 | 0.882 | 0.882 | 14 | 0 |
+| orthogonal Procrustes (ours) | 0.5244 | 0.805 | 0.810 | - | - |
+| affine, centre + scale + rotation (Plato's Key) | 0.5718 | 0.882 | 0.882 | 14 | 0 |
 | ridge CCA, rank selected on validation | 0.5708 | 0.881 | 0.881 | 12 | 7 |
 | SGD linear, InfoNCE | 0.5360 | 0.827 | 0.827 | 7 | 26 |
 | SGD 3-layer MLP, InfoNCE | 0.5232 | 0.807 | 0.807 | 7 | 28 |
@@ -41,7 +41,9 @@ The two rows share the estimator: a cross-covariance of paired representations, 
 | random semi-orthogonal map | 0.0027 | 0.004 | 0.004 | 0 | 42 |
 | Procrustes on shuffled pairs | 0.0035 | 0.005 | 0.005 | 0 | 42 |
 
-<img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/heatmap.png" alt="adapted nDCG@10 as a fraction of the source model score, orthogonal Procrustes, 42 directed pairs" width="520">
+<img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/heatmap.png" alt="ours, orthogonal Procrustes: adapted nDCG@10 as a fraction of the source model score, 42 directed pairs" width="520">
+
+The heatmap is ours, the orthogonal rotation, as a fraction of the old model's own score. Every green cell is a pair where a migration would keep the old index's quality; the e5-large row is the one an uncentred rotation cannot bridge, which is what the affine map of Plato's Key fixes.
 
 The map is not a migration. A rotation recovers 0.81 of the old index's nDCG@10 and the affine form 0.88, and neither beats keeping the old index except between two consecutive checkpoints of one family. If you migrate, the documents you already serve get worse by 4 to 51 points of nDCG@10 and the new model has to earn that back on documents it handles better.
 

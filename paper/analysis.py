@@ -289,7 +289,16 @@ def emit_tables(D, d):
                     w += 1
                 else:
                     l += 1
-        b.append(f"{f.replace('-infonce','').replace('sgd-','SGD-')} & {_f(np.mean(v))} & "
+        label = {"procrustes": "orthogonal Procrustes (ours)",
+                 "affine": "affine, centre and scale (Plato's Key)",
+                 "ridgecca": "ridge CCA, rank on validation",
+                 "sgd-linear-infonce": "SGD linear, InfoNCE",
+                 "sgd-mlp-infonce": "SGD 3-layer MLP, InfoNCE",
+                 "krr-rbf": "kernel ridge, RBF",
+                 "random": "random semi-orthogonal map",
+                 "shuffled": "Procrustes on shuffled pairs",
+                 "identity": "identity, pad or truncate"}.get(f, f)
+        b.append(f"{label} & {_f(np.mean(v))} & "
                  f"{_f(np.mean([r[f]/r['source'] for r in R if f in r]), 3)} & "
                  f"{_f(np.mean([r[f]/r['target'] for r in R if f in r]), 3)} & {w} & {l} \\\\")
     b += [r"\bottomrule", r"\end{tabular}"]
