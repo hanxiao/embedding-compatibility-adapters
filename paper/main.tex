@@ -45,9 +45,16 @@ Our contributions are measurements, not a new estimator.
 
 \paragraph{Notation.} $\mathbf{X}\in\mathbb{R}^{n\times d_s}$ and $\mathbf{Y}\in\mathbb{R}^{n\times d_t}$ are embeddings of the same $n$ calibration texts by the source and target model. $\mathbf{q}$ is a query from the source model, $\mathbf{d}$ a document embedded by the target. All vectors are L2-normalized before scoring, and retrieval uses cosine similarity against the target's own corpus embeddings.
 
-\paragraph{Orthogonal.} The map minimizes $\lVert\mathbf{X}\mathbf{R}-\mathbf{Y}\rVert_F$ over $\mathbf{R}^\top\mathbf{R}=\mathbf{I}$. With $\mathbf{X}^\top\mathbf{Y}=\mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$, the solution is $\mathbf{R}=\mathbf{U}\mathbf{V}^\top$. When $d_s\neq d_t$ the same formula returns a semi-orthogonal map of shape $d_s\times d_t$: it projects onto the smaller space rather than padding.
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{method.pdf}
+\caption{Two maps over one skeleton. Top, theirs: the affine map of Plato's Key \citep{platoskey2026} between the hidden states of two frozen LLMs. A donor key is centred, rotated, scaled and re-centred, then swapped in for the recipient's key at one layer, and the recipient answers. Bottom, ours: the orthogonal map of the earlier cross-model adapter report \citep{xiao2026adapters} between the pooled outputs of two text embedding models. A query is padded, rotated once, truncated, renormalized and compared with the target's own index. Both fit one cross-covariance and take one SVD. They differ in the object, in the affine terms, and in what the output has to satisfy.}
+\label{fig:methods}
+\end{figure}
 
-\paragraph{Affine.} The form fitted in the Plato's Key study,
+\paragraph{Orthogonal.} This is the map of the earlier cross-model adapter report \citep{xiao2026adapters}, and the bottom row of Figure~\ref{fig:methods}. It minimizes $\lVert\mathbf{X}\mathbf{R}-\mathbf{Y}\rVert_F$ over $\mathbf{R}^\top\mathbf{R}=\mathbf{I}$. With $\mathbf{X}^\top\mathbf{Y}=\mathbf{U}\boldsymbol{\Sigma}\mathbf{V}^\top$, the solution is $\mathbf{R}=\mathbf{U}\mathbf{V}^\top$. When $d_s\neq d_t$ the same formula returns a semi-orthogonal map of shape $d_s\times d_t$: it projects onto the smaller space rather than padding.
+
+\paragraph{Affine.} The top row of Figure~\ref{fig:methods}, fitted in the Plato's Key study \citep{platoskey2026},
 \begin{equation}
 \hat{\mathbf{z}}_B=\boldsymbol{\mu}_B+s\,\mathbf{R}\,(\mathbf{z}_A-\boldsymbol{\mu}_A),\qquad
 s=\frac{\lVert\tilde{\mathbf{Z}}_B\rVert_F}{\lVert\tilde{\mathbf{Z}}_A\rVert_F},

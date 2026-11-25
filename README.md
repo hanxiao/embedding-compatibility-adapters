@@ -14,6 +14,18 @@ Two numbers decide whether that map will work, and both come from the paired tex
 
 `rho` is the one nobody computes. CKA, the usual geometric gate, is invariant to rotation, so it cannot see the thing a map repairs: v5-nano and v5-small have CKA 0.958 and `rho = -0.001`, and doing nothing between them retrieves 0.002 nDCG@10. jina-v3 and bge-m3 have CKA 0.729 and `rho = 0.325`, and doing nothing already reaches 0.542.
 
+## Two maps, one skeleton
+
+<img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/method.png" alt="top: the affine map of Plato's Key between LLM hidden states. bottom: the orthogonal Procrustes map of this repo between pooled text embeddings" width="900">
+
+**Theirs, top, Plato's Key (Cheng, Liu, Yau, HazyResearch, 2026).** The unit is one hidden state of a frozen LLM at a chosen layer and token, the "key" that later layers use to retrieve a fact from the weights. The map is affine: subtract the donor's mean key, rotate by the orthogonal solution `R = UVᵀ`, multiply by one global scale `s = ‖Ỹ_B‖_F / ‖Ỹ_A‖_F`, add the recipient's mean back. The output is swapped in for the recipient's own key at layer `ℓ_B` and the recipient's remaining layers answer. Their purpose is to make one model use another's representation, and their calibration is a few thousand facts both models recall.
+
+**Ours, bottom, orthogonal Procrustes.** The unit is the pooled output vector of a text embedding model, one per query or document. The map is a pure rotation `W = UVᵀ` fitted on paired texts, with no centring and no scale, because cosine similarity is scale invariant and the target's index is stored uncentred. A query is zero-padded to the wider space, multiplied once, truncated back, renormalized, and compared against the target model's own corpus embeddings. The output is a ranking, scored as nDCG@10. Our purpose is to keep a corpus usable across a model switch.
+
+The two rows share the estimator: a cross-covariance of paired representations, one thin SVD, one orthogonal solution. They differ in the object (an intermediate state consumed by the next layer, or a final vector consumed by a similarity), in the affine terms, and in what the output has to satisfy.
+
+**What we took from them.** Three things. The affine form is now a second candidate in `adapter.py`, and it wins: it beats the rotation on 18 of 42 pairs with 14 significant wins and no significant losses, because an uncentred rotation is dominated by the mean direction when a model is anisotropic. Their evaluation protocol: select the operating point on validation queries by the downstream metric, fit on calibration, report on held-out, with controls at the same operating point. Their analyses: chaining, low-rank compression, and the recovery of retrievals only the donor model can produce.
+
 ## What a bridge actually buys
 
 42 directed pairs, seven models from five families, 13 NanoBEIR tasks, 5,000 calibration texts, 429 held-out queries. Three numbers per pair, the old model on its own index, the adapted query on the new index, and the new model natively.
