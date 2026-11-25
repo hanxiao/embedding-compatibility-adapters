@@ -5,3 +5,4 @@ paper/*.aux
 paper/*.log
 cache
 paper/main.pdf
+paper/*.out
