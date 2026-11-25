@@ -9,7 +9,7 @@ Two numbers decide whether that map will work, and both come from the paired tex
 | diagnostic | what it measures | what it predicts | correlation over 42 pairs |
 |---|---|---|---|
 | frame correlation `rho` | mean cosine between the two models' embeddings of the same text | whether you need a map at all | 0.95 with the identity baseline, -0.91 with what a map adds |
-| anisotropy `kappa` | `||mean|| / RMS(x - mean)` of one model | whether a rotation is enough | 0.87 with the gain of the affine form over the rotation |
+| anisotropy `kappa` | `‖mean‖ / RMS(x − mean)` of one model | whether a rotation is enough | 0.87 with the gain of the affine form over the rotation |
 | direction | expanding (`d_s < d_t`) or compressing | which failure to expect | a rotation loses 0.099 nDCG when it expands |
 
 `rho` is the one nobody computes. CKA, the usual geometric gate, is invariant to rotation, so it cannot see the thing a map repairs: v5-nano and v5-small have CKA 0.958 and `rho = -0.001`, and doing nothing between them retrieves 0.002 nDCG@10. jina-v3 and bge-m3 have CKA 0.729 and `rho = 0.325`, and doing nothing already reaches 0.542.
