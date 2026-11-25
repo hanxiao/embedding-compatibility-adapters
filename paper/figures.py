@@ -202,6 +202,39 @@ def fig_main(D, out):
     plt.close(fig)
 
 
+def fig_heatmap_pair(D, out, v=0.5, annotate=True, size=(7.2, 3.0)):
+    """Theirs and ours on one colour scale, same size."""
+    panels = [("affine", "theirs, affine (Plato's Key)"),
+              ("procrustes", "ours, orthogonal Procrustes")]
+    fig, axes = plt.subplots(1, 2, figsize=size, sharey=True)
+    for ax, (meth, title) in zip(axes, panels):
+        M = ratio_matrix(D, meth)
+        im = ax.imshow(M, cmap=CMAP, vmin=1 - v, vmax=1 + v)
+        ax.set_xticks(range(len(ORDER)), [SHORT[m] for m in ORDER], rotation=45, ha="right")
+        ax.set_title(title, fontsize=8.5, color=INK, loc="left", pad=6)
+        for i in range(len(ORDER)):
+            for j in range(len(ORDER)):
+                if i == j:
+                    ax.add_patch(plt.Rectangle((j - .5, i - .5), 1, 1, color="#f7f7f7", zorder=2))
+                    continue
+                if annotate and not np.isnan(M[i, j]):
+                    ax.text(j, i, f"{M[i, j]:.2f}", ha="center", va="center", fontsize=6.0,
+                            color="white" if abs(M[i, j] - 1) > 0.33 else INK, zorder=3)
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+        ax.tick_params(length=0)
+    axes[0].set_yticks(range(len(ORDER)), [SHORT[m] for m in ORDER])
+    axes[0].set_ylabel("source")
+    axes[0].set_xlabel("target")
+    axes[1].set_xlabel("target")
+    cb = fig.colorbar(im, ax=axes, fraction=0.03, pad=0.02)
+    cb.set_label("adapted / source", fontsize=8)
+    cb.ax.tick_params(labelsize=7, length=0)
+    cb.outline.set_visible(False)
+    fig.savefig(out)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="results.json")
@@ -210,7 +243,8 @@ if __name__ == "__main__":
     d = Path(a.dir)
     d.mkdir(exist_ok=True)
     D = load(a.results)
-    fig_heatmap(D, d / "heatmap.pdf")
+    fig_heatmap_pair(D, d / "heatmap.pdf")
+    fig_heatmap_pair(D, d / "heatmap_clean.pdf", annotate=False, size=(6.4, 2.7), v=0.4)
     fig_predictor(D, d / "predictor.pdf")
     if "lowrank" in D:
         fig_lowrank(D, d / "lowrank.pdf")
