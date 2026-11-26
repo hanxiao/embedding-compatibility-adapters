@@ -2,6 +2,8 @@
 
 [[Report](report.pdf)]
 
+<img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/architecture-pipeline.png" alt="architecture: paired texts go through the old model and the new model once, one SVD gives W, every query is mapped by W and scored against an index that is never re-encoded" width="900">
+
 Your embedding provider deprecated their model, you have millions of documents embedded with the old one, and re-embedding costs days of compute. A map fitted on a few thousand paired texts repairs the mismatch: one SVD, one matrix multiply, no training loop, no GPU.
 
 Two numbers decide whether that map will work, and both come from the paired texts before you fit anything.
