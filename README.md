@@ -43,7 +43,7 @@ The two rows share the estimator: a cross-covariance of paired representations, 
 
 <img src="https://raw.githubusercontent.com/hanxiao/embedding-compatibility-adapters/main/heatmap-theirs-vs-ours.png" alt="left, theirs, the affine map of Plato's Key. right, ours, the orthogonal map. adapted nDCG@10 as a fraction of the source model score over 42 directed pairs" width="900">
 
-The two heatmaps are the two maps of the figure above, on one colour scale, as a fraction of the old model's own score. Left is theirs, right is ours. Every green cell is a pair where a migration would keep the old index's quality. The two panels agree almost everywhere; the e5-large row is the one an uncentred rotation cannot bridge at all, 0.24 to 0.50, and the affine terms of Plato's Key put it back at 0.82 to 0.96.
+The two heatmaps are the two maps of the figure above, on one colour scale that runs 0 to 1, where 1 is the old model's own score. Left is theirs, right is ours. Two cells sit at 1.00 and 1.01 and are capped at the top of the scale. The two panels agree almost everywhere; the e5-large row is the one an uncentred rotation cannot bridge at all, 0.24 to 0.50, and the affine terms of Plato's Key put it back at 0.82 to 0.96.
 
 The map is not a migration. A rotation recovers 0.81 of the old index's nDCG@10 and the affine form 0.88, and neither beats keeping the old index except between two consecutive checkpoints of one family. If you migrate, the documents you already serve get worse by 4 to 51 points of nDCG@10 and the new model has to earn that back on documents it handles better.
 

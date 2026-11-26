@@ -84,14 +84,14 @@ where $\tilde{\mathbf{Z}}$ denotes a centred key matrix and $\mathbf{R}$ is the 
 \subsection{Three numbers per pair}
 \label{sec:main}
 
-Table~\ref{tab:matrix} gives the adapted nDCG@10 for every directed pair under the rotation, Figure~\ref{fig:heatmap} the rotation and the affine map side by side as a fraction of the source score, and Table~\ref{tab:native} the natives. A rotation fitted on 5{,}000 paired texts recovers 0.81 of the source model's nDCG@10 on average, with a range from 0.15 to 1.01 across pairs, and it beats the source index on 1 of 42 pairs. That pair, v5-nano to v5-small, is a pair of consecutive checkpoints of one family where the adapted query scores 0.6838 against the source's 0.6800. Everywhere else migration with a bridge costs the old index between 0.04 and 0.51 nDCG.
+Table~\ref{tab:matrix} gives the adapted nDCG@10 for every directed pair under the rotation, Figure~\ref{fig:heatmap} the same ratios with the two maps compared per pair, and Table~\ref{tab:native} the natives. A rotation fitted on 5{,}000 paired texts recovers 0.81 of the source model's nDCG@10 on average, with a range from 0.15 to 1.01 across pairs, and it beats the source index on 1 of 42 pairs. That pair, v5-nano to v5-small, is a pair of consecutive checkpoints of one family where the adapted query scores 0.6838 against the source's 0.6800. Everywhere else migration with a bridge costs the old index between 0.04 and 0.51 nDCG.
 
 The target's own score is a poor denominator. The adapted query reaches 0.81 of it, but that ratio is governed by how much better the target is, not by the map: the six pairs sourced from e5-large reach 0.32 to 0.96 of the target while their source ratios span the same range.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{figs/heatmap_clean.pdf}
-\caption{Adapted nDCG@10 as a fraction of the source model's own score, on one colour scale. Left, theirs, the affine map of Plato's Key. Right, ours, the orthogonal map. One row per source, one column per target. Green is a migration that keeps the old index's quality, red is a loss. The two panels agree except on the e5-large row, where the rotation collapses and the affine terms recover it.}
+\includegraphics[width=0.62\linewidth]{figs/pair_scatter.pdf}
+\caption{Each directed pair as a point. Both axes are the adapted nDCG@10 as a fraction of the source model's own score, so 1.0 means a migration that keeps the old index's quality. Horizontal, theirs, the affine map of Plato's Key; vertical, ours, the rotation. The two maps agree on 36 pairs and part company on the six whose source is e5-large, where the rotation collapses to 0.24 and the affine terms hold 0.82 and up.}
 \label{fig:heatmap}
 \end{figure}
 

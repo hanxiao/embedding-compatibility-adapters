@@ -75,7 +75,7 @@ def fig_heatmap(D, out):
         s.set_visible(False)
     ax.tick_params(length=0)
     cb = fig.colorbar(im, ax=ax, fraction=0.04, pad=0.03)
-    cb.set_label("adapted / source", fontsize=8)
+    cb.set_label("adapted / source nDCG@10", fontsize=8)
     cb.ax.tick_params(labelsize=7, length=0)
     cb.outline.set_visible(False)
     fig.savefig(out)
@@ -202,14 +202,14 @@ def fig_main(D, out):
     plt.close(fig)
 
 
-def fig_heatmap_pair(D, out, v=0.5, annotate=True, size=(7.2, 3.0)):
+def fig_heatmap_pair(D, out, lo=0.0, hi=1.0, annotate=True, size=(7.2, 3.0)):
     """Theirs and ours on one colour scale, same size."""
     panels = [("affine", "theirs, affine (Plato's Key)"),
               ("procrustes", "ours, orthogonal Procrustes")]
     fig, axes = plt.subplots(1, 2, figsize=size, sharey=True)
     for ax, (meth, title) in zip(axes, panels):
         M = ratio_matrix(D, meth)
-        im = ax.imshow(M, cmap=CMAP, vmin=1 - v, vmax=1 + v)
+        im = ax.imshow(M, cmap=CMAP, vmin=lo, vmax=hi)
         ax.set_xticks(range(len(ORDER)), [SHORT[m] for m in ORDER], rotation=45, ha="right")
         ax.set_title(title, fontsize=8.5, color=INK, loc="left", pad=6)
         for i in range(len(ORDER)):
@@ -218,8 +218,10 @@ def fig_heatmap_pair(D, out, v=0.5, annotate=True, size=(7.2, 3.0)):
                     ax.add_patch(plt.Rectangle((j - .5, i - .5), 1, 1, color="#f7f7f7", zorder=2))
                     continue
                 if annotate and not np.isnan(M[i, j]):
+                    r, g, b, _ = CMAP((M[i, j] - lo) / (hi - lo))
+                    lum = 0.299 * r + 0.587 * g + 0.114 * b
                     ax.text(j, i, f"{M[i, j]:.2f}", ha="center", va="center", fontsize=6.0,
-                            color="white" if abs(M[i, j] - 1) > 0.33 else INK, zorder=3)
+                            color="white" if lum < 0.5 else INK, zorder=3)
         for sp in ax.spines.values():
             sp.set_visible(False)
         ax.tick_params(length=0)
@@ -228,9 +230,35 @@ def fig_heatmap_pair(D, out, v=0.5, annotate=True, size=(7.2, 3.0)):
     axes[0].set_xlabel("target")
     axes[1].set_xlabel("target")
     cb = fig.colorbar(im, ax=axes, fraction=0.03, pad=0.02)
-    cb.set_label("adapted / source", fontsize=8)
+    cb.set_label("adapted / source nDCG@10", fontsize=8)
     cb.ax.tick_params(labelsize=7, length=0)
     cb.outline.set_visible(False)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def fig_pair_scatter(D, out):
+    """Theirs against ours, one point per directed pair, on a 0 to 1 axis."""
+    nat = {k: v["test_mean"] for k, v in D["native"].items()}
+    pts = []
+    for k, p in D["pairs"].items():
+        src = k.split("->")[0]
+        pts.append((p["affine"]["test_mean"] / nat[src],
+                    p["procrustes"]["test_mean"] / nat[src], src, k))
+    fig, ax = plt.subplots(figsize=(3.4, 3.0))
+    ax.plot([0, 1.02], [0, 1.02], color=LIGHT, lw=0.8, zorder=1)
+    for x, y, src, k in pts:
+        hot = src == "e5large"
+        ax.scatter(x, y, s=26 if hot else 16, zorder=3,
+                   facecolor=ACC if hot else "none",
+                   edgecolor=ACC if hot else GREY, linewidth=0.9)
+    ax.set_xlim(0, 1.02)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("theirs, affine")
+    ax.set_ylabel("ours, rotation")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.text(0.03, 0.96, "the diagonal is parity", fontsize=6.5, color=GREY, va="top")
+    ax.text(0.03, 0.89, "filled: source is e5-large", fontsize=6.5, color=ACC, va="top")
     fig.savefig(out)
     plt.close(fig)
 
@@ -244,7 +272,7 @@ if __name__ == "__main__":
     d.mkdir(exist_ok=True)
     D = load(a.results)
     fig_heatmap_pair(D, d / "heatmap.pdf")
-    fig_heatmap_pair(D, d / "heatmap_clean.pdf", annotate=False, size=(6.4, 2.7), v=0.4)
+    fig_pair_scatter(D, d / "pair_scatter.pdf")
     fig_predictor(D, d / "predictor.pdf")
     if "lowrank" in D:
         fig_lowrank(D, d / "lowrank.pdf")
