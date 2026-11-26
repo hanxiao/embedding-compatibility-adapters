@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 
 plt.rcParams.update({
     "font.family": "Inter",
@@ -202,14 +202,17 @@ def fig_main(D, out):
     plt.close(fig)
 
 
-def fig_heatmap_pair(D, out, lo=0.0, hi=1.0, annotate=True, size=(7.2, 3.0)):
+def fig_heatmap_pair(D, out, lo=0.0, hi=1.0, annotate=True, size=(7.2, 3.0), centre=None):
     """Theirs and ours on one colour scale, same size."""
     panels = [("affine", "theirs, affine (Plato's Key)"),
               ("procrustes", "ours, orthogonal Procrustes")]
     fig, axes = plt.subplots(1, 2, figsize=size, sharey=True)
     for ax, (meth, title) in zip(axes, panels):
         M = ratio_matrix(D, meth)
-        im = ax.imshow(M, cmap=CMAP, vmin=lo, vmax=hi)
+        norm = (TwoSlopeNorm(vmin=lo, vcenter=centre, vmax=hi) if centre is not None
+                else None)
+        im = (ax.imshow(M, cmap=CMAP, norm=norm) if norm is not None
+              else ax.imshow(M, cmap=CMAP, vmin=lo, vmax=hi))
         ax.set_xticks(range(len(ORDER)), [SHORT[m] for m in ORDER], rotation=45, ha="right")
         ax.set_title(title, fontsize=8.5, color=INK, loc="left", pad=6)
         for i in range(len(ORDER)):
@@ -218,7 +221,8 @@ def fig_heatmap_pair(D, out, lo=0.0, hi=1.0, annotate=True, size=(7.2, 3.0)):
                     ax.add_patch(plt.Rectangle((j - .5, i - .5), 1, 1, color="#f7f7f7", zorder=2))
                     continue
                 if annotate and not np.isnan(M[i, j]):
-                    r, g, b, _ = CMAP((M[i, j] - lo) / (hi - lo))
+                    v = (norm(M[i, j]) if centre is not None else (M[i, j] - lo) / (hi - lo))
+                    r, g, b, _ = CMAP(v)
                     lum = 0.299 * r + 0.587 * g + 0.114 * b
                     ax.text(j, i, f"{M[i, j]:.2f}", ha="center", va="center", fontsize=6.0,
                             color="white" if lum < 0.5 else INK, zorder=3)
