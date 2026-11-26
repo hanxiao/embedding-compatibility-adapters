@@ -1,13 +1,14 @@
-\begin{tabular}{llrrr}
+\begin{tabular}{lllrrrr}
 \toprule
-model & family & dim & all 649 & held-out 429 \\
+model & family & backbone & dim & $\kappa$ & all 649 & test 429 \\
 \midrule
-jina-v5-small & jina & 1024 & 0.6706 & 0.6822 \\
-jina-v5-nano & jina & 768 & 0.6669 & 0.6800 \\
-Qwen3-Embedding-0.6B & qwen & 1024 & 0.6473 & 0.6544 \\
-jina-v4 & jina & 2048 & 0.6466 & 0.6527 \\
-jina-v3 & jina & 1024 & 0.6342 & 0.6401 \\
-bge-m3 & bge & 1024 & 0.6040 & 0.6156 \\
-multilingual-e5-large-instruct & e5 & 1024 & 0.6104 & 0.6147 \\
+jina-embeddings-v5-small & jina & qwen3 & 1024 & 0.34 & 0.6706 & 0.6822 \\
+jina-embeddings-v5-nano & jina & eurobert & 768 & 0.35 & 0.6669 & 0.6800 \\
+Qwen3-Embedding-0.6B & qwen & qwen3 & 1024 & 0.50 & 0.6479 & 0.6558 \\
+snowflake-arctic-embed-m-v1.5 & snowflake & bert & 768 & 0.49 & 0.6479 & 0.6529 \\
+jina-embeddings-v4 & jina & qwen25vl & 2048 & 0.99 & 0.6466 & 0.6527 \\
+jina-embeddings-v3 & jina & xlmr & 1024 & 0.27 & 0.6342 & 0.6401 \\
+bge-m3 & bge & xlmr & 1024 & 0.74 & 0.6040 & 0.6156 \\
+multilingual-e5-large-instruct & e5 & xlmr & 1024 & 1.82 & 0.6104 & 0.6147 \\
 \bottomrule
 \end{tabular}

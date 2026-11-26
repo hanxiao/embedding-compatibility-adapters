@@ -1,4 +1,4 @@
-"""NanoBEIR tasks, qrels, cached embeddings for seven embedding models."""
+"""NanoBEIR tasks, qrels, cached embeddings for eight embedding models across six families."""
 import json
 from pathlib import Path
 
@@ -12,15 +12,16 @@ TASKS = [
 ]
 SYMMETRIC = {"NanoQuoraRetrieval", "NanoSCIDOCS", "NanoArguAna"}
 
-# four jina models + three local models, one name per model everywhere
+# Eight models from six vendors/families, spanning 768 to 2048 dimensions.
 MODELS = {
-    "v3": dict(dim=1024, family="jina", label="jina-v3"),
-    "v4": dict(dim=2048, family="jina", label="jina-v4"),
-    "v5nano": dict(dim=768, family="jina", label="jina-v5-nano"),
-    "v5small": dict(dim=1024, family="jina", label="jina-v5-small"),
-    "qwen3_06b": dict(dim=1024, family="qwen", label="Qwen3-Embedding-0.6B"),
-    "bgem3": dict(dim=1024, family="bge", label="bge-m3"),
-    "e5large": dict(dim=1024, family="e5", label="multilingual-e5-large-instruct"),
+    "v3": dict(dim=1024, family="jina", backbone="xlmr", label="jina-embeddings-v3", short="v3"),
+    "v4": dict(dim=2048, family="jina", backbone="qwen25vl", label="jina-embeddings-v4", short="v4"),
+    "v5nano": dict(dim=768, family="jina", backbone="eurobert", label="jina-embeddings-v5-nano", short="v5n"),
+    "v5small": dict(dim=1024, family="jina", backbone="qwen3", label="jina-embeddings-v5-small", short="v5s"),
+    "qwen3_06b": dict(dim=1024, family="qwen", backbone="qwen3", label="Qwen3-Embedding-0.6B", short="q3"),
+    "bgem3": dict(dim=1024, family="bge", backbone="xlmr", label="bge-m3", short="bge"),
+    "e5large": dict(dim=1024, family="e5", backbone="xlmr", label="multilingual-e5-large-instruct", short="e5"),
+    "arctic_m": dict(dim=768, family="snowflake", backbone="bert", label="snowflake-arctic-embed-m-v1.5", short="arc"),
 }
 
 
@@ -44,9 +45,22 @@ def load_task(cache, task, model):
     return norm(q), norm(c)
 
 
-def load_calibration(cache, model):
-    q = np.load(Path(cache) / f"cal5k_retquery_{model}_retrieval_query_embs.npy")
-    p = np.load(Path(cache) / f"cal5k_retpassage_{model}_retrieval_passage_embs.npy")
+def load_calibration(cache, model, role="mixed"):
+    """Load paired AG News calibration embeddings.
+
+    role:
+      'mixed'   -> 5,000 rows (2,500 query-mode + 2,500 passage-mode)
+      'query'   -> 2,500 query-mode rows
+      'passage' -> 2,500 passage-mode rows
+    """
+    q_path = Path(cache) / f"cal5k_retquery_{model}_retrieval_query_embs.npy"
+    p_path = Path(cache) / f"cal5k_retpassage_{model}_retrieval_passage_embs.npy"
+    if role == "query":
+        return norm(np.load(q_path))
+    if role == "passage":
+        return norm(np.load(p_path))
+    q = np.load(q_path)
+    p = np.load(p_path)
     return norm(np.vstack([q, p]))
 
 

@@ -1,12 +1,13 @@
 \begin{tabular}{lrrr}
 \toprule
-method & expanding & compressing & difference \\
+method & $d_s < d_t$ (17) & $d_s = d_t$ (22) & $d_s > d_t$ (17) \\
 \midrule
-procrustes & 0.4749 & 0.5739 & -0.0991 \\
-affine & 0.5650 & 0.5786 & -0.0137 \\
-ridgecca & 0.5701 & 0.5714 & -0.0013 \\
-sgd-linear & 0.5346 & 0.5374 & -0.0028 \\
-sgd-mlp & 0.5229 & 0.5234 & -0.0005 \\
-krr-rbf & 0.5040 & 0.4489 & 0.0551 \\
+Orthogonal Procrustes & 0.5240 & 0.5015 & 0.4734 \\
+Source-centred Procrustes & 0.5338 & 0.5518 & 0.5100 \\
+Affine (fixed, Plato's Key) & 0.4897 & 0.5298 & 0.5251 \\
+Affine (val-selected) & 0.5400 & 0.5599 & 0.5346 \\
+Ridge regression & 0.4706 & 0.5204 & 0.5126 \\
+Whitened Procrustes & 0.4970 & 0.5335 & 0.5290 \\
+Ridge CCA (two-sided) & 0.5402 & 0.5603 & 0.5266 \\
 \bottomrule
 \end{tabular}

@@ -1,5 +1,5 @@
-"""The protocol: fit on calibration, pick the operating point on validation
-queries, report on held-out queries. Natives and per-query hit sets come along.
+"""Evaluation protocol: fit on calibration, select operating point on validation
+queries by downstream nDCG@10, report on held-out test queries.
 """
 import time
 from pathlib import Path
@@ -12,13 +12,29 @@ from .evaluate import analyze
 
 CANDIDATES = {
     "procrustes": lambda X, Y: [A.fit_procrustes(X, Y)],
-    "affine": lambda X, Y: [A.fit_affine(X, Y, c, s)
-                            for c in (True, False) for s in (True, False)],
-    "ridgecca": lambda X, Y: [A.fit_ridge_cca(X, Y, k) for k in (32, 64, 128, 256, 384, 512)],
-    "krr-rbf": lambda X, Y: [A.fit_krr_rbf(X, Y, lam=l, sigma_mult=s)
-                             for l in (1e-3, 1e-2) for s in (0.5, 1.0)],
+    "affine-cs": lambda X, Y: [A.fit_affine(X, Y, centre=True, scale=True)],
+    "affine-ls": lambda X, Y: [A.fit_affine(X, Y, centre=True, scale=True, ls_scale=True)],
+    "affine": lambda X, Y: [
+        A.fit_affine(X, Y, c, s) for c in (True, False) for s in (True, False)
+    ],
+    "ridge": lambda X, Y: [
+        A.fit_ridge(X, Y, lam=l, rescale=r)
+        for l in (1e-5, 1e-4, 3e-4, 1e-3, 1e-2, 1e-1)
+        for r in (False, True)
+    ],
+    "whitened-proc": lambda X, Y: [
+        A.fit_whitened_procrustes(X, Y, lam=l) for l in (1e-2, 1e-1, 1.0)
+    ],
+    "ridgecca": lambda X, Y: [
+        A.fit_ridge_cca(X, Y, k) for k in (32, 64, 128, 256, 384, 512)
+    ],
+    "krr-rbf": lambda X, Y: [
+        A.fit_krr_rbf(X, Y, lam=l, sigma_mult=s)
+        for l in (1e-3, 1e-2)
+        for s in (0.5, 1.0)
+    ],
     "sgd-linear-infonce": lambda X, Y: [A.fit_sgd_linear(X, Y)],
-    "sgd-mlp-infonce": lambda X, Y: [A.fit_sgd_mlp(X, Y)],
+    "sgd-resmlp-infonce": lambda X, Y: [A.fit_sgd_mlp(X, Y)],
 }
 
 CONTROLS = {
@@ -34,7 +50,9 @@ class Study:
         self.models = models or list(data.MODELS)
         self.tasks = tasks or data.TASKS
         self.verbose = verbose
-        self.cal = {m: data.load_calibration(self.cache, m) for m in self.models}
+        self.cal = {m: data.load_calibration(self.cache, m, "mixed") for m in self.models}
+        self.cal_q = {m: data.load_calibration(self.cache, m, "query") for m in self.models}
+        self.cal_p = {m: data.load_calibration(self.cache, m, "passage") for m in self.models}
         self.q, self.c, self.rel = {}, {}, {}
         self.val, self.test = {}, {}
         for t in self.tasks:
@@ -43,11 +61,18 @@ class Study:
             for m in self.models:
                 q, c = data.load_task(self.cache, t, m)
                 self.q[t][m], self.c[t][m] = q, c
+        self.set_seed(seed)
+
+    def set_seed(self, seed):
+        self.seed = seed
+        for t in self.tasks:
             n = len(self.q[t][self.models[0]])
             self.val[t], self.test[t] = data.split_queries(n, seed=seed)
-            if verbose:
-                print(f"  {t}: {n} queries, {self.val[t].size} val / {self.test[t].size} test",
-                      flush=True)
+            if self.verbose and seed == 0:
+                print(
+                    f"  {t}: {n} queries, {self.val[t].size} val / {self.test[t].size} test",
+                    flush=True,
+                )
 
     # ---------------------------------------------------------------- scoring
     def idx(self, task, split):
@@ -62,13 +87,11 @@ class Study:
         d = self.c[task][tgt]
         return adapter.transform_source(q) @ adapter.transform_target(d).T
 
-    def native(self, model, task, split="test"):
-        i = self.idx(task, split)
-        return self.q[task][model][i] @ self.c[task][model].T
-
     def eval_method(self, src, tgt, adapter, split="test"):
-        return {t: analyze(self.scores(src, tgt, adapter, t, split), self.rel[t],
-                           self.idx(t, split)) for t in self.tasks}
+        return {
+            t: analyze(self.scores(src, tgt, adapter, t, split), self.rel[t], self.idx(t, split))
+            for t in self.tasks
+        }
 
     def eval_native(self, model, split="test"):
         out = {}
@@ -88,21 +111,31 @@ class Study:
         for name, fn in (families or {**CANDIDATES, **CONTROLS}).items():
             t0 = time.time()
             cands = fn(X, Y)
-            vals = [self.mean(self.eval_method(src, tgt, a, "val")) for a in cands]
-            ad = cands[int(np.argmax(vals))]
+            if len(cands) == 1:
+                ad = cands[0]
+                val_score = self.mean(self.eval_method(src, tgt, ad, "val"))
+                vals = [val_score]
+            else:
+                vals = [self.mean(self.eval_method(src, tgt, a, "val")) for a in cands]
+                ad = cands[int(np.argmax(vals))]
+                val_score = max(vals)
             res = self.eval_method(src, tgt, ad, "test")
             out[name] = dict(
                 test={t: r["ndcg"] for t, r in res.items()},
                 test_mean=float(np.mean([r["ndcg"] for r in res.values()])),
-                val=float(max(vals)), val_candidates=[float(v) for v in vals],
+                val=float(val_score),
+                val_candidates=[float(v) for v in vals],
                 meta=ad.meta(),
             )
-            if keep_hits:
+            if keep_hits and name in ("procrustes", "affine", "affine-cs", "ridge"):
                 out[name]["hits"] = {t: res[t]["hits"] for t in self.tasks}
                 out[name]["qids"] = {t: res[t]["qids"] for t in self.tasks}
             if self.verbose:
-                print(f"    {name:20s} val={max(vals):.4f} test={out[name]['test_mean']:.4f} "
-                      f"{ad.meta().get('kind', '')} ({time.time() - t0:.1f}s)", flush=True)
+                print(
+                    f"    {name:20s} val={val_score:.4f} test={out[name]['test_mean']:.4f} "
+                    f"{ad.meta().get('kind', '')} ({time.time() - t0:.1f}s)",
+                    flush=True,
+                )
         return out
 
     # ---------------------------------------------------------------- natives
@@ -111,12 +144,18 @@ class Study:
         for m in self.models:
             per_task = {t: self.eval_native(m, split)[t]["ndcg"] for t in self.tasks}
             per_task_all = {t: self.eval_native(m, "all")[t]["ndcg"] for t in self.tasks}
-            out[m] = dict(test=per_task, all=per_task_all,
-                          test_mean=float(np.mean(list(per_task.values()))),
-                          all_mean=float(np.mean(list(per_task_all.values()))))
+            out[m] = dict(
+                test=per_task,
+                all=per_task_all,
+                test_mean=float(np.mean(list(per_task.values()))),
+                all_mean=float(np.mean(list(per_task_all.values()))),
+            )
             if self.verbose:
-                print(f"  native {m:10s} test={out[m]['test_mean']:.4f} "
-                      f"all={out[m]['all_mean']:.4f}", flush=True)
+                print(
+                    f"  native {m:10s} test={out[m]['test_mean']:.4f} "
+                    f"all={out[m]['all_mean']:.4f}",
+                    flush=True,
+                )
         return out
 
 
@@ -155,8 +194,12 @@ def align_hits(src_res, tgt_res, adp_hits, adp_qids, tasks):
         for k in pooled:
             pooled[k] += st[k]
     rate = lambda a, b: float(a / b) if b else float("nan")
-    return dict(per_task=per_task,
-                recoverable=rate(pooled["rec"], pooled["rec_d"]), n_recoverable=pooled["rec_d"],
-                loss=rate(pooled["loss"], pooled["loss_d"]), n_target_hits=pooled["loss_d"],
-                keep_target_only=rate(pooled["keep"], pooled["keep_d"]),
-                n_target_only=pooled["keep_d"])
+    return dict(
+        per_task=per_task,
+        recoverable=rate(pooled["rec"], pooled["rec_d"]),
+        n_recoverable=pooled["rec_d"],
+        loss=rate(pooled["loss"], pooled["loss_d"]),
+        n_target_hits=pooled["loss_d"],
+        keep_target_only=rate(pooled["keep"], pooled["keep_d"]),
+        n_target_only=pooled["keep_d"],
+    )

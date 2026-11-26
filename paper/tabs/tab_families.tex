@@ -2,14 +2,19 @@
 \toprule
 method & nDCG@10 & /source & /target & wins & losses \\
 \midrule
-orthogonal Procrustes (ours) & 0.5244 & 0.805 & 0.810 & 0 & 0 \\
-affine, centre and scale (Plato's Key) & 0.5718 & 0.882 & 0.882 & 14 & 0 \\
-ridge CCA, rank on validation & 0.5708 & 0.881 & 0.881 & 12 & 7 \\
-SGD linear, InfoNCE & 0.5360 & 0.827 & 0.827 & 7 & 26 \\
-SGD 3-layer MLP, InfoNCE & 0.5232 & 0.807 & 0.807 & 7 & 28 \\
-kernel ridge, RBF & 0.4764 & 0.735 & 0.732 & 7 & 26 \\
-random semi-orthogonal map & 0.0027 & 0.004 & 0.004 & 0 & 42 \\
-Procrustes on shuffled pairs & 0.0035 & 0.005 & 0.005 & 0 & 42 \\
-identity, pad or truncate & 0.0746 & 0.119 & 0.119 & 1 & 39 \\
+Orthogonal Procrustes (ours) & 0.4998 & 0.766 & 0.771 & -- & -- \\
+Affine, centre + scale (Plato's Key, fixed) & 0.5162 & 0.796 & 0.794 & 17 & 20 \\
+Source-centred Procrustes (ours, fixed) & 0.5336 & 0.822 & 0.822 & 13 & 15 \\
+Affine, centre + LS scale (fixed) & 0.4752 & 0.733 & 0.730 & 14 & 26 \\
+Affine, val-selected (Plato's Key) & 0.5462 & 0.841 & 0.842 & 18 & 0 \\
+Ridge regression, val-selected & 0.5029 & 0.775 & 0.774 & 13 & 25 \\
+Whitened Procrustes, val-selected & 0.5210 & 0.803 & 0.802 & 20 & 18 \\
+Ridge CCA (two-sided), val-selected & 0.5440 & 0.838 & 0.838 & 16 & 8 \\
+SGD linear, InfoNCE & 0.5345 & 0.824 & 0.824 & 16 & 18 \\
+SGD 3-layer residual MLP, InfoNCE & 0.5301 & 0.817 & 0.817 & 16 & 16 \\
+Kernel ridge, RBF & 0.4549 & 0.701 & 0.699 & 9 & 36 \\
+Identity, pad or truncate & 0.0567 & 0.090 & 0.091 & 1 & 53 \\
+Procrustes on shuffled pairs & 0.0035 & 0.005 & 0.005 & 0 & 56 \\
+Random semi-orthogonal map & 0.0027 & 0.004 & 0.004 & 0 & 56 \\
 \bottomrule
 \end{tabular}
